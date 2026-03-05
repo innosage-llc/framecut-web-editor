@@ -1,4 +1,3 @@
-
 {
   "name": "dev-1-framecut-web-editor",
   "private": true,
@@ -12,6 +11,7 @@
   "dependencies": {
     "jszip": "^3.10.1",
     "lucide-react": "^0.555.0",
+    "mp4-muxer": "^5.2.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
