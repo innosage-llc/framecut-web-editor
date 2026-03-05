@@ -101,16 +101,25 @@ Tests are configured in [playwright.config.ts](file:///Users/weijingliunyu/IdeaP
 
 ## 📦 Deployment
 
-This is a static-site-ready Vite application.
+This project is optimized for deployment on **Cloudflare Pages**. We use a two-tier deployment strategy to balance speed and safety:
 
-### Build
+### 1. Staging (Automatic)
+Every push to the `master` (or `main`) branch is automatically built and deployed. This allows for rapid testing of new features.
+- **Workflow**: `git push origin master`
+- **Host**: Cloudflare Pages (Managed Git Integration)
+
+### 2. Production (Tag-Driven)
+Production releases are triggered manually using git tags. This ensures that only stable, versioned code is deployed to your primary domain while saving CI/CD minutes.
+
 ```bash
-npm run build
+# 1. Tag your release
+git tag v1.0.0
+git push origin --tags
+
+# 2. Deploy to production
+npm run deploy:prod
 ```
 
-### Static Hosting
-The output in the `dist/` directory can be deployed to any static hosting provider:
-- **Vercel/Netlify**: Just connect the repo; it will auto-detect Vite.
-- **GitHub Pages**: Ensure `base` is correctly set in `vite.config.ts`.
-- **AWS S3/CloudFront**: Upload `dist/` contents. Note that media assets must support **CORS** for some features (like Export/Mosaic) to work.
+### Deployment Guide
+For detailed instructions on setting up Cloudflare Pages, custom domains, and the local release script, please refer to the [Cloudflare Deployment Guide](docs/feature/cloudflare-deployment.md).
 
