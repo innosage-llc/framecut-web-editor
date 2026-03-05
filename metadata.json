@@ -1,0 +1,8 @@
+{
+  "name": "6-FrameCut Web Editor",
+  "description": "A professional-grade, frame-by-frame video editor component with timeline visualization and precise controls.",
+  "requestFramePermissions": [
+    "display-capture",
+    "microphone"
+  ]
+}
