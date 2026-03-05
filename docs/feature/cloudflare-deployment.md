@@ -136,3 +136,19 @@ Click **Save and Deploy**.
 1.  Wait for the DNS to propagate (usually 1-5 minutes).
 2.  Navigate to your custom domain in a browser.
 3.  Verify that the editor loads correctly and all features (Upload, Record, Timeline) are functional.
+
+## 14. Continuous Deployment & Common Practices
+
+The "Common Practice" for web projects is a **Push-to-Deploy** workflow. Because Cloudflare Pages is integrated with your GitHub repository, your deployment process is now fully automated.
+
+### The Daily Workflow
+1.  **Develop**: Make changes locally and test with `npm run dev`.
+2.  **Commit**: `git add . && git commit -m "Your description"`
+3.  **Push**: `git push origin master` (or `main`).
+4.  **Automatic Update**: Cloudflare detects the push and begins building your project immediately. No manual steps are required.
+
+### Branch Protection (Production Safety)
+In professional environments, it is common to:
+1.  **Use Pull Requests**: Never push directly to `master`. Create a feature branch, then open a PR.
+2.  **Preview Deployments**: Cloudflare Pages will automatically build a **Preview URL** for every branch/PR. This allows you to test the feature in a production-like environment *before* it hits your live site.
+3.  **Merge to Deploy**: Once the PR is approved, merging it into `master` triggers the final production deployment.
