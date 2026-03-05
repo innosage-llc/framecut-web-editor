@@ -178,10 +178,58 @@ if [ "$TRUST" = "high" ]; then
     exit 0
 fi
 
+post_hold_check() {
+    local cycle=$1
+    if [ "$cycle" -gt 2 ]; then
+        echo -e "   ${RED}❌ Exceeded 2 post-hold cycles. Escalating to human.${NC}"
+        exit 1
+    fi
+
+    local NEEDS_RERUN=false
+
+    # 1. Check for unresolved review comments
+    local REVIEW_COMMENTS
+    REVIEW_COMMENTS=$(gh pr view "$PR_NUMBER" --json reviewDecision -q .reviewDecision 2>/dev/null || echo "")
+    
+    if [ "$REVIEW_COMMENTS" = "CHANGES_REQUESTED" ]; then
+        echo -e "   ${YELLOW}📝 Changes requested. Agent addressing...${NC}"
+        # TODO: Phase 2 - invoke agent to fix + reply
+        # agent-run --fix-review "$PR_URL"
+        echo -e "   ${RED}(Stub: Escalating to human to fix review for now)${NC}"
+        exit 1
+        # NEEDS_RERUN=true
+    fi
+
+    # 2. Check for conflicts with main
+    git fetch origin main >/dev/null 2>&1
+    if ! git merge origin/main --no-commit --no-ff >/dev/null 2>&1; then
+        git merge --abort >/dev/null 2>&1 || true
+        echo -e "   ${YELLOW}⚠️ Conflict detected. Agent resolving...${NC}"
+        # TODO: Phase 2 - invoke agent to resolve conflict
+        # agent-run --fix-conflict "$PR_URL"
+        echo -e "   ${RED}(Stub: Escalating to human to resolve conflict for now)${NC}"
+        exit 1
+        # NEEDS_RERUN=true
+    else
+        git merge --abort >/dev/null 2>&1 || true
+        echo -e "   ${GREEN}✅ No conflicts with main.${NC}"
+    fi
+
+    if [ "$NEEDS_RERUN" = true ]; then
+        echo -e "   ${YELLOW}🔄 Rerunning gate post-fix...${NC}"
+        ./scripts/gatekeeper.sh || exit 1
+        # Recursive call to check again after fix
+        post_hold_check $((cycle + 1))
+    fi
+}
+
 if [ "$TRUST" = "medium" ]; then
     echo -e "${YELLOW}⏳ Trust Tier MEDIUM. Waiting 10s (simulating 10 min hold) before merge...${NC}"
-    # In a full deployment, this is `sleep 600`. Shortened here for testing loops.
+    # In a full deployment, this is \`sleep 600\`. Shortened here for testing loops.
     sleep 10
+    
+    echo -e "   ${YELLOW}🔍 Running post-hold checks...${NC}"
+    post_hold_check 1
 fi
 
 # Log to audit
