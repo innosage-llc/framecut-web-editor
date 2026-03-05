@@ -62,17 +62,31 @@ fi
 
 git fetch origin "$BRANCH" >/dev/null 2>&1
 LOCAL_HASH=$(git rev-parse HEAD)
-REMOTE_HASH=$(git rev-parse "origin/$BRANCH")
+REMOTE_HASH=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
 
-if [ "$LOCAL_HASH" != "$REMOTE_HASH" ]; then
-    echo -e "${RED}❌ Error: Local branch is not synced with remote origin/${BRANCH}.${NC}"
-    echo "   Please push your changes first."
-    exit 1
-fi
+# Auto-sync: commit dirty working tree, push unpushed commits, then restart
+SYNCED=false
 
 if [ -n "$(git status --porcelain)" ]; then
-    echo -e "${RED}❌ Error: Uncommitted changes detected.${NC}"
-    exit 1
+    echo -e "   ${YELLOW}📦 Uncommitted changes detected. Auto-committing...${NC}"
+    git add -A
+    git commit -m "chore(agent): sync pending local changes before gate"
+    SYNCED=true
+fi
+
+if [ "$SYNCED" = true ] || { [ -n "$REMOTE_HASH" ] && [ "$(git rev-list --count origin/"$BRANCH"..HEAD 2>/dev/null || echo 0)" -gt 0 ]; } || [ -z "$REMOTE_HASH" ]; then
+    UNPUSHED=$(git rev-list --count "origin/$BRANCH"..HEAD 2>/dev/null || echo 1)
+    if [ "$UNPUSHED" -gt 0 ] || [ -z "$REMOTE_HASH" ]; then
+        echo -e "   ${YELLOW}🚀 Pushing local commits to origin/$BRANCH...${NC}"
+        git push -u origin "$BRANCH"
+        SYNCED=true
+    fi
+fi
+
+if [ "$SYNCED" = true ]; then
+    echo -e "   ${GREEN}✅ Synced. Restarting gate on clean state...${NC}"
+    echo ""
+    exec "$0" "$@"
 fi
 
 # ==========================================================
