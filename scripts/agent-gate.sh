@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # scripts/agent-gate.sh
-# Automated Agent CI workflow: sync with master, run local gatekeeper, trust-tier, auto-merge
+# Automated Agent CI workflow: sync with base branch, run local gatekeeper, trust-tier, auto-merge
 
 set -euo pipefail
 
@@ -11,6 +11,9 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+
+# Define base branch (adjust to 'main' or 'master' depending on repo)
+BASE_BRANCH="master"
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║        🤖 Agent Gate CI Workflow                         ║${NC}"
@@ -35,8 +38,8 @@ fi
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo -e "   Current Branch: ${GREEN}${BRANCH}${NC}"
 
-if [ "$BRANCH" = "master" ] || [ "$BRANCH" = "master" ]; then
-    echo -e "${RED}❌ Error: Cannot run agent-gate on master/master branch.${NC}"
+if [ "$BRANCH" = "$BASE_BRANCH" ]; then
+    echo -e "${RED}❌ Error: Cannot run agent-gate on $BASE_BRANCH branch.${NC}"
     exit 1
 fi
 
@@ -73,24 +76,24 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 # ==========================================================
-# STEP 2: Sync with Main
+# STEP 2: Sync with Base Branch
 # ==========================================================
-echo -e "${YELLOW}🔄 Step 2/5: Syncing with master branch${NC}"
-git fetch origin master >/dev/null 2>&1
+echo -e "${YELLOW}🔄 Step 2/5: Syncing with $BASE_BRANCH branch${NC}"
+git fetch origin "$BASE_BRANCH" >/dev/null 2>&1
 
-BEHIND_COUNT=$(git rev-list --count HEAD..origin/master)
+BEHIND_COUNT=$(git rev-list --count HEAD..origin/"$BASE_BRANCH")
 if [ "$BEHIND_COUNT" -gt 0 ]; then
-    echo -e "   ${YELLOW}Behind master by ${BEHIND_COUNT} commits. Merging...${NC}"
-    if git merge origin/master --no-edit; then
-        echo -e "   ${GREEN}✅ Successfully merged master${NC}"
+    echo -e "   ${YELLOW}Behind $BASE_BRANCH by ${BEHIND_COUNT} commits. Merging...${NC}"
+    if git merge origin/"$BASE_BRANCH" --no-edit; then
+        echo -e "   ${GREEN}✅ Successfully merged $BASE_BRANCH${NC}"
         git push origin HEAD
     else
-        echo -e "${RED}❌ Error: Merge conflicts detected with master branch.${NC}"
+        echo -e "${RED}❌ Error: Merge conflicts detected with $BASE_BRANCH branch.${NC}"
         git merge --abort
         exit 1
     fi
 else
-    echo -e "   ${GREEN}Already up to date with master${NC}"
+    echo -e "   ${GREEN}Already up to date with $BASE_BRANCH${NC}"
 fi
 
 # ==========================================================
@@ -144,7 +147,7 @@ if [ "$CI_PASSED" = false ]; then
     exit 1
 fi
 
-CHANGED_FILES=$(git diff --name-only origin/master...HEAD)
+CHANGED_FILES=$(git diff --name-only origin/"$BASE_BRANCH"...HEAD)
 
 # Determine Trust Tier
 if echo "$CHANGED_FILES" | grep -qE '^(src/auth|src/payment|src/payments|infra|\.github/workflows)/'; then
@@ -200,9 +203,9 @@ post_hold_check() {
         # NEEDS_RERUN=true
     fi
 
-    # 2. Check for conflicts with main
-    git fetch origin main >/dev/null 2>&1
-    if ! git merge origin/main --no-commit --no-ff >/dev/null 2>&1; then
+    # 2. Check for conflicts with base branch
+    git fetch origin "$BASE_BRANCH" >/dev/null 2>&1
+    if ! git merge origin/"$BASE_BRANCH" --no-commit --no-ff >/dev/null 2>&1; then
         git merge --abort >/dev/null 2>&1 || true
         echo -e "   ${YELLOW}⚠️ Conflict detected. Agent resolving...${NC}"
         # TODO: Phase 2 - invoke agent to resolve conflict
@@ -212,7 +215,7 @@ post_hold_check() {
         # NEEDS_RERUN=true
     else
         git merge --abort >/dev/null 2>&1 || true
-        echo -e "   ${GREEN}✅ No conflicts with main.${NC}"
+        echo -e "   ${GREEN}✅ No conflicts with $BASE_BRANCH.${NC}"
     fi
 
     if [ "$NEEDS_RERUN" = true ]; then
