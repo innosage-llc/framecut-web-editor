@@ -152,3 +152,34 @@ In professional environments, it is common to:
 1.  **Use Pull Requests**: Never push directly to `master`. Create a feature branch, then open a PR.
 2.  **Preview Deployments**: Cloudflare Pages will automatically build a **Preview URL** for every branch/PR. This allows you to test the feature in a production-like environment *before* it hits your live site.
 3.  **Merge to Deploy**: Once the PR is approved, merging it into `master` triggers the final production deployment.
+
+## 15. Production Releases (Tag-Driven)
+
+For the "Real Production" environment, we use a **Local Tag-Driven** strategy. This saves GitHub Action minutes and ensures production is only updated when you explicitly create a version tag.
+
+### Step 1: Create the Production Project
+1.  Go to **Workers & Pages** > **Create application** > **Pages**.
+2.  **Important**: Do NOT select "Connect to Git". Click **Upload assets**.
+3.  Project Name: `framecut-production`.
+4.  Click **Create project**.
+
+### Step 2: Deploying a Release
+When you are ready to release a new version to your production domain:
+
+1.  **Tag your commit**:
+    ```bash
+    git tag v1.0.0
+    git push origin --tags
+    ```
+2.  **Run the deployment script**:
+    ```bash
+    npm run deploy:prod
+    ```
+
+### How the Script Works
+The script (`scripts/deploy-prod.sh`) performs the following safety checks:
+1.  **Tag Validation**: It verifies that the current commit has a git tag. If not, it aborts to prevent accidental deployments of "work-in-progress" code.
+2.  **Local Build**: It runs `npm run build` to ensure the latest assets are compiled.
+3.  **Direct Upload**: It uses `wrangler` to upload the `dist` folder directly to the `framecut-production` project.
+
+> **Note**: The first time you run this, you will be prompted to log in to your Cloudflare account in your browser.
