@@ -94,9 +94,9 @@ if [ "$MODE" = "start" ]; then
         echo -e "${YELLOW}📋 Using provided prompt as context...${NC}"
         ISSUE_BODY="# Context\n\n$TASK_INPUT"
         # Generate a branch name by lowercasing, replacing non-alphanumeric with dashes, and trimming length
-        SLUG=$(echo "$TASK_INPUT" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-30)
+        SLUG=$(echo "$TASK_INPUT" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9' '-' | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-30)
         if [ -z "$SLUG" ]; then SLUG=$(date +%s); fi
-        BRANCH_NAME="feat/task-${SLUG}"
+        BRANCH_NAME="feat/task-$SLUG"
     fi
 
     echo -e "${YELLOW}🌿 Creating feature branch: ${BRANCH_NAME}${NC}"
@@ -105,7 +105,7 @@ if [ "$MODE" = "start" ]; then
 
     echo ""
     echo -e "${BLUE}=================== TASK CONTEXT ===================${NC}"
-    echo -e "$ISSUE_BODY"
+    echo "$ISSUE_BODY"
     echo -e "${BLUE}====================================================${NC}"
     echo ""
     echo -e "${GREEN}Work environment ready! You can now start coding.${NC}"
