@@ -159,9 +159,14 @@ fi
 
 echo -e "   Trust Tier assigned: ${BLUE}${TRUST}${NC}"
 
+# Ensure Trust labels exist in the repository
+gh label create "trust:low" -c "0E8A16" -d "Auto-merge immediately" -f 2>/dev/null || true
+gh label create "trust:medium" -c "FBCA04" -d "Auto-merge after 10-min hold" -f 2>/dev/null || true
+gh label create "trust:high" -c "D93F0B" -d "Human review required" -f 2>/dev/null || true
+
 # Update PR labels
 gh pr edit "$PR_URL" --remove-label "trust:low,trust:medium,trust:high" 2>/dev/null || true
-gh pr edit "$PR_URL" --add-label "trust:${TRUST}" >/dev/null 2>&1 || echo "   ⚠️ Could not add label (create it in repo settings to silence this)"
+gh pr edit "$PR_URL" --add-label "trust:${TRUST}" >/dev/null
 
 # ==========================================================
 # STEP 5: Merge PR
