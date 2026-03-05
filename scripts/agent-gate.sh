@@ -161,7 +161,7 @@ echo -e "   Trust Tier assigned: ${BLUE}${TRUST}${NC}"
 
 # Update PR labels
 gh pr edit "$PR_URL" --remove-label "trust:low,trust:medium,trust:high" 2>/dev/null || true
-gh pr edit "$PR_URL" --add-label "trust:${TRUST}" >/dev/null
+gh pr edit "$PR_URL" --add-label "trust:${TRUST}" >/dev/null 2>&1 || echo "   ⚠️ Could not add label (create it in repo settings to silence this)"
 
 # ==========================================================
 # STEP 5: Merge PR
