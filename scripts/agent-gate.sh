@@ -241,68 +241,33 @@ post_hold_check() {
 }
 
 if [ "$TRUST" = "medium" ]; then
-    # Look for the most recent hold start for this PR in AUDIT.md
-    LAST_HOLD=$(grep "Hold started for PR \[#$PR_NUMBER\]" AUDIT.md | tail -n 1 || echo "")
-    
-    HOLD_DURATION=180 # 3 minutes (180 seconds)
-    REMAINING=$HOLD_DURATION
-    
-    if [ -n "$LAST_HOLD" ]; then
-        # Extract timestamp: **YYYY-MM-DD HH:MM:SS**
-        HOLD_TS=$(echo "$LAST_HOLD" | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")
-        
-        # Cross-platform date to epoch
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            START_EPOCH=$(date -j -f "%Y-%m-%d %H:%M:%S" "$HOLD_TS" +%s)
-        else
-            START_EPOCH=$(date -d "$HOLD_TS" +%s)
-        fi
-        
-        NOW=$(date +%s)
-        ELAPSED=$((NOW - START_EPOCH))
-        REMAINING=$((HOLD_DURATION - ELAPSED))
-        
-        if [ "$REMAINING" -gt 0 ]; then
-             echo -e "   ${YELLOW}🔄 Resuming hold. ${ELAPSED}s passed, ${REMAINING}s remaining.${NC}"
-        else
-             echo -e "   ${GREEN}✅ Hold period expired ($ELAPSED seconds ago). Proceeding.${NC}"
-             REMAINING=0
-        fi
-    else
-        # New hold
-        TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-        echo "- **${TIMESTAMP}**: Hold started for PR [#${PR_NUMBER}](${PR_URL}) (Wait: 3m)" >> AUDIT.md
-        echo -e "   ${YELLOW}⏳ Starting 3-minute hold (logged to AUDIT.md)${NC}"
-    fi
-
-    # Loop with verbose progress updates every 30s to prevent agent timeout
+    echo -e "${YELLOW}⏳ Trust Tier MEDIUM. Starting 3-minute hold (180s)...${NC}"
+    REMAINING=180
     while [ "$REMAINING" -gt 0 ]; do
         echo -e "   ${BLUE}⏱️  $((REMAINING / 60))m $((REMAINING % 60))s remaining...${NC}"
-        
-        # Sleep in 30s chunks
         SLEEP_TIME=$((REMAINING > 30 ? 30 : REMAINING))
         sleep "$SLEEP_TIME"
         REMAINING=$((REMAINING - SLEEP_TIME))
-        
-        # Heartbeat to AUDIT.md every 60s
-        PASSED=$((HOLD_DURATION - REMAINING))
-        if [ $((PASSED % 60)) -eq 0 ] && [ "$REMAINING" -gt 0 ]; then
-             TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-             echo "- **${TIMESTAMP}**: PR [#${PR_NUMBER}] hold in progress ($((PASSED/60))m passed)" >> AUDIT.md
-        fi
     done
-
+    
     echo -e "   ${YELLOW}🔍 Hold complete. Running post-hold checks...${NC}"
     post_hold_check 1
 fi
 
-# Log to audit
+# Final Audit & Sync
 TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
 echo -e "- **${TIMESTAMP}**: Merged PR [#${PR_NUMBER}](${PR_URL}) (Trust: \`${TRUST}\`)" >> AUDIT.md
+echo -e "   ${YELLOW}📝 Syncing final audit trail...${NC}"
+git add AUDIT.md
+git commit -m "chore(audit): merge PR #$PR_NUMBER [skip ci]" --no-verify
+git push origin "$BRANCH"
 
 echo -e "   Merging PR #${PR_NUMBER} with squash..."
 if gh pr merge "$PR_NUMBER" --squash; then
     echo -e "${GREEN}✅ PR merged successfully!${NC}"
+    # Cleanup: return to base branch
+    git checkout "$BASE_BRANCH"
+    git pull origin "$BASE_BRANCH"
     exit 0
 else
     echo -e "${RED}❌ Failed to merge PR${NC}"
