@@ -19,6 +19,49 @@ echo -e "${BLUE}╚════════════════════�
 echo ""
 
 # ==========================================================
+# HELPER: Sync pending local changes to remote, then re-run
+# ==========================================================
+# Called before invoking agent-gate.sh to guarantee the remote PR
+# reflects exactly what is on disk. If any sync was needed, the
+# script re-execs itself so the gate always starts from a clean slate.
+sync_and_rerun() {
+    local SYNCED=false
+
+    # 1. Uncommitted local changes → auto-commit
+    if [ -n "$(git status --porcelain)" ]; then
+        echo -e "   ${YELLOW}📦 Uncommitted changes detected. Auto-committing...${NC}"
+        git add -A
+        git commit -m "chore(agent): sync pending local changes before gate"
+        SYNCED=true
+    fi
+
+    # 2. Committed but not pushed → push now
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    # Check if remote tracking branch exists
+    if git rev-parse --verify "origin/$CURRENT_BRANCH" >/dev/null 2>&1; then
+        UNPUSHED=$(git rev-list --count "origin/$CURRENT_BRANCH"..HEAD 2>/dev/null || echo 0)
+    else
+        # No remote tracking branch yet — treat all commits as unpushed
+        UNPUSHED=1
+    fi
+
+    if [ "$UNPUSHED" -gt 0 ]; then
+        echo -e "   ${YELLOW}🚀 Pushing ${UNPUSHED} unpushed commit(s) to origin/$CURRENT_BRANCH...${NC}"
+        git push -u origin "$CURRENT_BRANCH"
+        SYNCED=true
+    fi
+
+    # 3. If anything was synced, re-exec this script so we start fresh
+    if [ "$SYNCED" = true ]; then
+        echo -e "   ${GREEN}✅ Remote PR is now up to date. Restarting script...${NC}"
+        echo ""
+        exec "$0" "$@"
+    fi
+
+    echo -e "   ${GREEN}✅ No pending changes — remote is in sync.${NC}"
+}
+
+# ==========================================================
 # USAGE
 # ==========================================================
 # ./scripts/agent-run.sh <issue-number>
@@ -93,11 +136,23 @@ echo "Phase 2 TODO: Invoke Claude Code CLI with context:"
 echo ""
 echo "  claude --context AGENTS.md --context SOUL.md --context MEMORY.md \\"
 echo "         --task \"\$ISSUE_BODY\" \\"
-echo "         --on-complete './scripts/gatekeeper.sh && git push origin HEAD && gh pr create --fill && ./scripts/agent-gate.sh'"
+echo "         --on-complete './scripts/gatekeeper.sh && ./scripts/agent-run.sh $ISSUE_NUMBER'"
 echo ""
 echo -e "${YELLOW}⚠️  Agent invocation not yet wired. Complete Phase 2 to enable.${NC}"
 
-echo -e "${YELLOW}🔀 Step 4/4: Gate + Merge${NC}"
-echo "Once the agent finishes and pushes, run:"
-echo "  gh pr create --fill"
-echo "  ./scripts/agent-gate.sh"
+echo -e "${YELLOW}🔀 Step 4/4: Sync → PR → Gate + Merge${NC}"
+# Sync any pending local changes before opening the PR and running the gate.
+# This is the key hook: after the agent finishes working locally, calling
+# this script again (as shown above in --on-complete) will auto-push
+# and then trigger the gate.
+sync_and_rerun "$@"
+
+# Open PR if not already open
+PR_EXISTS=$(gh pr view --json number -q .number 2>/dev/null || echo "")
+if [ -z "$PR_EXISTS" ]; then
+    echo -e "   ${YELLOW}📬 Opening PR...${NC}"
+    gh pr create --fill
+fi
+
+echo -e "   ${GREEN}🚀 Running agent-gate.sh...${NC}"
+./scripts/agent-gate.sh
