@@ -102,9 +102,13 @@ Follow these steps to deploy your project to your domain via Cloudflare.
 
 1.  Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/).
 2.  In the sidebar, select **Workers & Pages**.
-3.  Click **Create application** > **Pages** > **Connect to Git**.
-4.  Select your GitHub account and the `innosage-llc/framecut-web-editor` repository.
-5.  Click **Begin setup**.
+3.  Click the **Create** button.
+4.  **Crucial**: Select the **Pages** tab (not the Workers tab).
+5.  Click **Connect to Git**.
+6.  Select your GitHub account and the `innosage-llc/framecut-web-editor` repository.
+7.  Click **Begin setup**.
+
+> **Note**: If you see a "Deploy command" field asking for `npx wrangler deploy`, you are likely on the **Workers** tab. Switch to the **Pages** tab to see the correct settings for a Vite project.
 
 ### Step 2: Configure Build Settings
 
