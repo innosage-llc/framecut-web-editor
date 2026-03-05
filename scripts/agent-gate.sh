@@ -241,9 +241,54 @@ post_hold_check() {
 }
 
 if [ "$TRUST" = "medium" ]; then
-    echo -e "${YELLOW}⏳ Trust Tier MEDIUM. Waiting 600s (10 min hold) before merge...${NC}"
-    sleep 600
+    # Look for the most recent hold start for this PR in AUDIT.md
+    LAST_HOLD=$(grep "Hold started for PR \[#$PR_NUMBER\]" AUDIT.md | tail -n 1 || echo "")
     
+    REMAINING=600
+    if [ -n "$LAST_HOLD" ]; then
+        # Extract timestamp: **YYYY-MM-DD HH:MM:SS**
+        HOLD_TS=$(echo "$LAST_HOLD" | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")
+        
+        # Cross-platform date to epoch
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            START_EPOCH=$(date -j -f "%Y-%m-%d %H:%M:%S" "$HOLD_TS" +%s)
+        else
+            START_EPOCH=$(date -d "$HOLD_TS" +%s)
+        fi
+        
+        NOW=$(date +%s)
+        ELAPSED=$((NOW - START_EPOCH))
+        REMAINING=$((600 - ELAPSED))
+        
+        if [ "$REMAINING" -gt 0 ]; then
+             echo -e "   ${YELLOW}🔄 Resuming hold. ${ELAPSED}s passed, ${REMAINING}s remaining.${NC}"
+        else
+             echo -e "   ${GREEN}✅ Hold period expired ($ELAPSED seconds ago). Proceeding.${NC}"
+             REMAINING=0
+        fi
+    else
+        # New hold
+        TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+        echo "- **${TIMESTAMP}**: Hold started for PR [#${PR_NUMBER}](${PR_URL}) (Wait: 10m)" >> AUDIT.md
+        echo -e "   ${YELLOW}⏳ Starting 10-minute hold (logged to AUDIT.md)${NC}"
+    fi
+
+    # Loop with progress updates
+    while [ "$REMAINING" -gt 0 ]; do
+        # Sleep in 60s chunks to allow for visibility/interruption
+        SLEEP_TIME=$((REMAINING > 60 ? 60 : REMAINING))
+        sleep "$SLEEP_TIME"
+        REMAINING=$((REMAINING - SLEEP_TIME))
+        
+        PASSED=$((600 - REMAINING))
+        # Heartbeat to AUDIT.md every 2 mins
+        if [ $((PASSED % 120)) -eq 0 ] && [ "$REMAINING" -gt 0 ]; then
+             TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+             echo "- **${TIMESTAMP}**: PR [#${PR_NUMBER}] hold in progress ($((PASSED/60))m passed)" >> AUDIT.md
+             echo -e "   ${BLUE}⏱️  $((PASSED/60))m passed...${NC}"
+        fi
+    done
+
     echo -e "   ${YELLOW}🔍 Running post-hold checks...${NC}"
     post_hold_check 1
 fi
