@@ -67,32 +67,46 @@ fi
 # MODE: START <issue-number>
 # ==========================================================
 if [ "$MODE" = "start" ]; then
-    ISSUE_NUMBER="${2:-}"
-    if [ -z "$ISSUE_NUMBER" ]; then
-        echo -e "${RED}❌ Error: Please provide an issue number. (e.g. $0 start 42)${NC}"
+    TASK_INPUT="${2:-}"
+    if [ -z "$TASK_INPUT" ]; then
+        echo -e "${RED}❌ Error: Please provide an issue number or a literal prompt.${NC}"
+        echo -e "   Examples:"
+        echo -e "     $0 start 42"
+        echo -e "     $0 start 'address code review for PR 6'"
         exit 1
     fi
 
-    echo -e "${YELLOW}📋 Fetching Issue #${ISSUE_NUMBER}...${NC}"
-    ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json title,body,labels -q '
-      "# " + .title + "\n\n" + .body
-    ' 2>/dev/null || echo "")
+    if [[ "$TASK_INPUT" =~ ^[0-9]+$ ]]; then
+        # It's an issue number
+        echo -e "${YELLOW}📋 Fetching Issue #${TASK_INPUT}...${NC}"
+        ISSUE_BODY=$(gh issue view "$TASK_INPUT" --json title,body,labels -q '
+          "# " + .title + "\n\n" + .body
+        ' 2>/dev/null || echo "")
 
-    if [ -z "$ISSUE_BODY" ]; then
-        echo -e "${RED}❌ Error: Could not fetch issue #${ISSUE_NUMBER}.${NC}"
-        exit 1
+        if [ -z "$ISSUE_BODY" ]; then
+            echo -e "${RED}❌ Error: Could not fetch issue #${TASK_INPUT}.${NC}"
+            exit 1
+        fi
+        echo -e "   ${GREEN}✅ Issue fetched${NC}"
+        BRANCH_NAME="feat/issue-${TASK_INPUT}"
+    else
+        # It's a text prompt
+        echo -e "${YELLOW}📋 Using provided prompt as context...${NC}"
+        ISSUE_BODY="# Context\n\n$TASK_INPUT"
+        # Generate a branch name by lowercasing, replacing non-alphanumeric with dashes, and trimming length
+        SLUG=$(echo "$TASK_INPUT" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-30)
+        if [ -z "$SLUG" ]; then SLUG=$(date +%s); fi
+        BRANCH_NAME="feat/task-${SLUG}"
     fi
-    echo -e "   ${GREEN}✅ Issue fetched${NC}"
 
-    BRANCH_NAME="feat/issue-${ISSUE_NUMBER}"
     echo -e "${YELLOW}🌿 Creating feature branch: ${BRANCH_NAME}${NC}"
     git checkout -b "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
     echo -e "   ${GREEN}✅ Branch ready${NC}"
 
     echo ""
-    echo -e "${BLUE}=================== ISSUE CONTEXT ===================${NC}"
-    echo "$ISSUE_BODY"
-    echo -e "${BLUE}=====================================================${NC}"
+    echo -e "${BLUE}=================== TASK CONTEXT ===================${NC}"
+    echo -e "$ISSUE_BODY"
+    echo -e "${BLUE}====================================================${NC}"
     echo ""
     echo -e "${GREEN}Work environment ready! You can now start coding.${NC}"
     echo -e "When you are done, run: ${YELLOW}./scripts/agent-run.sh finish${NC}"

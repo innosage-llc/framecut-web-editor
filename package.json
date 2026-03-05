@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy:prod": "./scripts/deploy-prod.sh",
-    "version": "git add package.json"
+    "version": "git add package.json --no-verify"
   },
   "dependencies": {
     "jszip": "^3.10.1",
