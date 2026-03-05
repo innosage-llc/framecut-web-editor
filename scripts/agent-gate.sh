@@ -241,9 +241,8 @@ post_hold_check() {
 }
 
 if [ "$TRUST" = "medium" ]; then
-    echo -e "${YELLOW}⏳ Trust Tier MEDIUM. Waiting 10s (simulating 10 min hold) before merge...${NC}"
-    # In a full deployment, this is \`sleep 600\`. Shortened here for testing loops.
-    sleep 10
+    echo -e "${YELLOW}⏳ Trust Tier MEDIUM. Waiting 600s (10 min hold) before merge...${NC}"
+    sleep 600
     
     echo -e "   ${YELLOW}🔍 Running post-hold checks...${NC}"
     post_hold_check 1
