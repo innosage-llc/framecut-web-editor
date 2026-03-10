@@ -189,6 +189,7 @@ const App: React.FC = () => {
                 mainSrc={state.mainVideo?.src}
                 outroSrc={state.outro?.src}
                 currentTimeRef={currentTimeRef} 
+                currentTime={state.currentTime}
                 isMuted={videoCtx.muted}
                 corsCompatible={videoCtx.corsCompatible}
                 audioSrc={audioCtx.src}

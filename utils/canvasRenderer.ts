@@ -70,6 +70,73 @@ export interface RenderCropInfo {
     destH: number;
 }
 
+interface SubtitleLayoutCacheEntry {
+    font: string;
+    fontSize: number;
+    lines: string[];
+    lineHeight: number;
+    totalHeight: number;
+    maxWidth: number;
+}
+
+const subtitleLayoutCache = new Map<string, SubtitleLayoutCacheEntry>();
+
+const getSubtitleLayout = (sub: Subtitle, canvasHeight: number): SubtitleLayoutCacheEntry => {
+    const fontSize = Math.max(12, canvasHeight * (0.05 * (sub.fontSize ? sub.fontSize / 100 : 1)));
+    const fontFamily = sub.fontFamily || 'Arial';
+    const fontWeight = sub.fontWeight || 'bold';
+    const fontStyle = sub.fontStyle || 'normal';
+    const font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}, sans-serif`;
+    const cacheKey = [
+        sub.id,
+        sub.text || '',
+        font,
+        sub.backgroundColor || '',
+        sub.strokeColor || '',
+        sub.strokeWidth || 0,
+        canvasHeight
+    ].join('|');
+
+    const cached = subtitleLayoutCache.get(cacheKey);
+    if (cached) return cached;
+
+    const measureCanvas = document.createElement('canvas');
+    const measureCtx = measureCanvas.getContext('2d');
+    if (!measureCtx) {
+        return {
+            font,
+            fontSize,
+            lines: [sub.text || ''],
+            lineHeight: fontSize * 1.25,
+            totalHeight: fontSize * 1.25,
+            maxWidth: 0
+        };
+    }
+
+    measureCtx.font = font;
+    const lines = (sub.text || '').split('\n');
+    const lineHeight = fontSize * 1.25;
+    const totalHeight = lines.length * lineHeight;
+    let maxWidth = 0;
+
+    lines.forEach(line => {
+        const width = measureCtx.measureText(line).width;
+        if (width > maxWidth) maxWidth = width;
+    });
+
+    const entry = {
+        font,
+        fontSize,
+        lines,
+        lineHeight,
+        totalHeight,
+        maxWidth
+    };
+
+    subtitleLayoutCache.set(cacheKey, entry);
+    return entry;
+};
+
 export const renderVideoFrame = (
     ctx: CanvasRenderingContext2D,
     video: HTMLVideoElement | HTMLImageElement,
@@ -566,49 +633,32 @@ export const renderSubtitles = (
         const x = subX / 100 * canvasWidth;
         const y = subY / 100 * canvasHeight;
         const rotation = (sub.rotation ?? 0) * Math.PI / 180;
+        const layout = getSubtitleLayout(sub, canvasHeight);
 
         ctx.translate(x, y);
         ctx.rotate(rotation);
         ctx.scale(scale, scale);
 
-        const fontSize = Math.max(12, canvasHeight * (0.05 * (sub.fontSize ? sub.fontSize / 100 : 1)));
-        const fontFamily = sub.fontFamily || 'Arial';
-        const fontWeight = sub.fontWeight || 'bold';
-        const fontStyle = sub.fontStyle || 'normal';
-        
-        ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}, sans-serif`;
+        ctx.font = layout.font;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-
-        // --- Multi-line Support ---
-        const text = sub.text || '';
-        const lines = text.split('\n');
-        const lineHeight = fontSize * 1.25; 
-        const totalHeight = lines.length * lineHeight;
-        
-        // Calculate max width for background
-        let maxWidth = 0;
-        lines.forEach(line => {
-            const metrics = ctx.measureText(line);
-            if (metrics.width > maxWidth) maxWidth = metrics.width;
-        });
 
         // 1. Draw Unified Background (if applicable)
         if (sub.backgroundColor && sub.backgroundColor !== 'transparent') {
             ctx.shadowColor = 'transparent'; 
-            const bgPadX = fontSize * 0.8;
-            const bgPadY = fontSize * 0.4;
+            const bgPadX = layout.fontSize * 0.8;
+            const bgPadY = layout.fontSize * 0.4;
             ctx.fillStyle = sub.backgroundColor;
             
             // Draw a rounded rectangle background covering the whole text block
-            const bgX = -maxWidth / 2 - bgPadX / 2;
-            const bgY = -totalHeight / 2 - bgPadY / 2;
-            const bgW = maxWidth + bgPadX;
-            const bgH = totalHeight + bgPadY;
+            const bgX = -layout.maxWidth / 2 - bgPadX / 2;
+            const bgY = -layout.totalHeight / 2 - bgPadY / 2;
+            const bgW = layout.maxWidth + bgPadX;
+            const bgH = layout.totalHeight + bgPadY;
             
             ctx.beginPath();
             if ((ctx as any).roundRect) {
-                (ctx as any).roundRect(bgX, bgY, bgW, bgH, fontSize * 0.2);
+                (ctx as any).roundRect(bgX, bgY, bgW, bgH, layout.fontSize * 0.2);
             } else {
                 ctx.rect(bgX, bgY, bgW, bgH);
             }
@@ -618,9 +668,9 @@ export const renderSubtitles = (
         // 2. Prepare Text Effects (Disable if skimming)
         if (sub.textShadow && !isSkimming) {
             ctx.shadowColor = sub.shadowColor || 'black';
-            ctx.shadowBlur = sub.shadowBlur ? (sub.shadowBlur / 100 * fontSize) : (fontSize * 0.2);
-            ctx.shadowOffsetX = fontSize * 0.05;
-            ctx.shadowOffsetY = fontSize * 0.05;
+            ctx.shadowBlur = sub.shadowBlur ? (sub.shadowBlur / 100 * layout.fontSize) : (layout.fontSize * 0.2);
+            ctx.shadowOffsetX = layout.fontSize * 0.05;
+            ctx.shadowOffsetY = layout.fontSize * 0.05;
         } else {
             ctx.shadowColor = 'transparent';
             ctx.shadowBlur = 0;
@@ -631,29 +681,29 @@ export const renderSubtitles = (
 
         // 3. Draw Lines
         // Start Y is shifted up by half the total height to keep the text block centered on (0,0)
-        let currentY = -((lines.length - 1) * lineHeight) / 2;
+        let currentY = -((layout.lines.length - 1) * layout.lineHeight) / 2;
 
-        lines.forEach(line => {
+        layout.lines.forEach(line => {
             // Stroke (Disable or simplify if skimming?) 
             // Simplifying: Keep stroke but remove complex processing if any. Standard stroke is cheap-ish.
             // But let's skip stroke if skimming to be ultra fast if requested "Draw raw video". 
             // But we need to see text.
             if (sub.strokeWidth && sub.strokeWidth > 0 && sub.strokeColor && !isSkimming) {
-                ctx.lineWidth = (sub.strokeWidth / 100) * fontSize;
+                ctx.lineWidth = (sub.strokeWidth / 100) * layout.fontSize;
                 ctx.strokeStyle = sub.strokeColor;
                 ctx.lineJoin = 'round';
                 ctx.strokeText(line, 0, currentY);
             } else if ((!sub.backgroundColor || sub.backgroundColor === 'transparent') && !sub.textShadow) {
                 // Default subtle outline if no background and no shadow for visibility
                 ctx.strokeStyle = 'black';
-                ctx.lineWidth = fontSize * 0.15;
+                ctx.lineWidth = layout.fontSize * 0.15;
                 ctx.lineJoin = 'round';
                 ctx.strokeText(line, 0, currentY);
             }
 
             // Fill
             ctx.fillText(line, 0, currentY);
-            currentY += lineHeight;
+            currentY += layout.lineHeight;
         });
 
         ctx.restore();
