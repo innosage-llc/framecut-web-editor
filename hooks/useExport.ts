@@ -93,11 +93,9 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             
             // Cast to any because the new methods are dynamically added via useImperativeHandle
             const recorder = playerRef.current as any;
-            let exportCanvas = recorder.prepareExportCanvas
-                ? recorder.prepareExportCanvas(width, height)
-                : canvas;
             
             const exportConfig = await recorder.startOfflineSession(width, height, fps, audioBuffer);
+            let exportCanvas = canvas;
             if (exportConfig && recorder.prepareExportCanvas) {
                 exportCanvas = recorder.prepareExportCanvas(exportConfig.width, exportConfig.height);
             }
