@@ -204,6 +204,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const internalPreviewTimeRef = useRef<number | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const sourceDimensionsRef = useRef({ width: 0, height: 0 });
+  const exportCanvasLockRef = useRef<{ width: number; height: number } | null>(null);
   
   // Refs for Props (To avoid stale closures in RAF)
   const srcRef = useRef(src);
@@ -337,7 +338,34 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
   const syncExportCanvasSize = (width: number, height: number) => {
       sourceDimensionsRef.current = { width, height };
+
+      const lockedSize = exportCanvasLockRef.current;
+      if (lockedSize) {
+          syncCanvasSize(exportCanvasRef.current, lockedSize.width, lockedSize.height);
+          return;
+      }
+
       syncCanvasSize(exportCanvasRef.current, width, height);
+  };
+
+  const lockExportCanvasSize = (width: number, height: number) => {
+      const lockedSize = {
+          width: alignEven(width),
+          height: alignEven(height)
+      };
+
+      exportCanvasLockRef.current = lockedSize;
+      syncCanvasSize(exportCanvasRef.current, lockedSize.width, lockedSize.height);
+
+      return exportCanvasRef.current;
+  };
+
+  const releaseExportCanvasSize = () => {
+      exportCanvasLockRef.current = null;
+
+      if (sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
+          syncCanvasSize(exportCanvasRef.current, sourceDimensionsRef.current.width, sourceDimensionsRef.current.height);
+      }
   };
 
   const syncPreviewCanvasSize = () => {
@@ -739,13 +767,15 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       if ((exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) && sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
           syncExportCanvasSize(sourceDimensionsRef.current.width, sourceDimensionsRef.current.height);
       }
-      return isExportingRef.current ? exportCanvasRef.current : canvasRef.current;
+      return (isExportingRef.current || exportCanvasLockRef.current) ? exportCanvasRef.current : canvasRef.current;
   };
 
   useImperativeHandle(ref, () => ({ 
       startRecording, stopRecording, captureFrame, seekTo, renderFrame: renderFrameNow, getCanvas, previewSeek,
       startOfflineSession: startOfflineSession as any, addVideoFrame: addVideoFrame as any, finishOfflineSession: finishOfflineSession as any,
-      encodeAudioAsM4a
+      encodeAudioAsM4a,
+      prepareExportCanvas: lockExportCanvasSize as any,
+      releaseExportCanvas: releaseExportCanvasSize as any
   }));
 
   useEffect(() => {

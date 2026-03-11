@@ -93,8 +93,14 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             
             // Cast to any because the new methods are dynamically added via useImperativeHandle
             const recorder = playerRef.current as any;
+            let exportCanvas = recorder.prepareExportCanvas
+                ? recorder.prepareExportCanvas(width, height)
+                : canvas;
             
-            await recorder.startOfflineSession(width, height, fps, audioBuffer);
+            const exportConfig = await recorder.startOfflineSession(width, height, fps, audioBuffer);
+            if (exportConfig && recorder.prepareExportCanvas) {
+                exportCanvas = recorder.prepareExportCanvas(exportConfig.width, exportConfig.height);
+            }
 
             // 4. Frame Loop
             const duration = state.duration;
@@ -118,7 +124,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
                 // Keyframe every 2 seconds
                 const isKeyFrame = i % (fps * 2) === 0;
                 
-                await recorder.addVideoFrame(canvas, timestampUs, isKeyFrame);
+                await recorder.addVideoFrame(exportCanvas, timestampUs, isKeyFrame);
                 
                 // Allow UI to breathe slightly
                 await new Promise(r => setTimeout(r, 0));
@@ -161,6 +167,9 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             console.error("Offline Export Failed", e);
             alert("Export failed: " + e.message);
             setState(prev => ({ ...prev, isExporting: false }));
+        } finally {
+            const recorder = playerRef.current as any;
+            recorder?.releaseExportCanvas?.();
         }
 
     }, [state, setState, currentTimeRef, playerRef]);
