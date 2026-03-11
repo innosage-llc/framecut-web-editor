@@ -4,8 +4,67 @@ import { Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, PlayerRef, Clip, E
 import { RotateCcw, Check, Crosshair } from 'lucide-react';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useCanvasRecorder } from '../hooks/useCanvasRecorder';
-import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, renderPreview, calculateZoomRect } from '../utils/canvasRenderer';
+import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, calculateZoomRect } from '../utils/canvasRenderer';
 import PropertyHUD from './PropertyHUD';
+
+type TimedItem = { start: number; end: number };
+
+interface ActiveIntervalCursor<T extends TimedItem> {
+  items: T[];
+  nextIndex: number;
+  active: T[];
+  lastTime: number | null;
+}
+
+const PREVIEW_MAX_LONG_EDGE = 1280;
+const CURSOR_RESET_THRESHOLD = 1;
+
+const createActiveIntervalCursor = <T extends TimedItem>(items: T[] = []): ActiveIntervalCursor<T> => ({
+  items: [...items].sort((a, b) => a.start - b.start),
+  nextIndex: 0,
+  active: [],
+  lastTime: null
+});
+
+const upperBoundByStart = <T extends TimedItem>(items: T[], time: number) => {
+  let low = 0;
+  let high = items.length;
+
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (items[mid].start <= time) low = mid + 1;
+    else high = mid;
+  }
+
+  return low;
+};
+
+const resolveActiveItems = <T extends TimedItem>(cursor: ActiveIntervalCursor<T>, time: number): T[] => {
+  const isJump =
+    cursor.lastTime === null ||
+    time < cursor.lastTime ||
+    Math.abs(time - cursor.lastTime) > CURSOR_RESET_THRESHOLD;
+
+  if (isJump) {
+    cursor.nextIndex = upperBoundByStart(cursor.items, time);
+    cursor.active = cursor.items.slice(0, cursor.nextIndex).filter(item => item.end > time);
+  } else {
+    while (cursor.nextIndex < cursor.items.length && cursor.items[cursor.nextIndex].start <= time) {
+      const item = cursor.items[cursor.nextIndex];
+      if (item.end > time) cursor.active.push(item);
+      cursor.nextIndex += 1;
+    }
+    cursor.active = cursor.active.filter(item => item.end > time);
+  }
+
+  cursor.lastTime = time;
+  return cursor.active;
+};
+
+const getClipDuration = (clip: Clip) => (clip.sourceEnd - clip.sourceStart) / clip.speed;
+const getClipEnd = (clip: Clip) => clip.offset + getClipDuration(clip);
+
+const alignEven = (value: number) => Math.max(2, Math.round(value / 2) * 2);
 
 interface PlayerProps {
   src: string | null; 
@@ -16,6 +75,7 @@ interface PlayerProps {
   // Removed time-dependent props (sourceTime, activeMediaType, currentTime)
   // Only Ref is used for time
   currentTimeRef: React.MutableRefObject<number>; 
+  currentTime: number;
   
   isMuted?: boolean;
   corsCompatible?: boolean; 
@@ -79,6 +139,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   mainSrc,
   outroSrc,
   currentTimeRef,
+  currentTime,
   isMuted = false,
   corsCompatible = true,
   audioSrc,
@@ -135,13 +196,15 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixelCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const maskCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const exportCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null); 
   const requestRef = useRef<number | null>(null);
   
   const internalPreviewTimeRef = useRef<number | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const sourceDimensionsRef = useRef({ width: 0, height: 0 });
+  const exportCanvasLockRef = useRef<{ width: number; height: number } | null>(null);
   
   // Refs for Props (To avoid stale closures in RAF)
   const srcRef = useRef(src);
@@ -149,6 +212,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const zoomEffectsRef = useRef(zoomEffects);
   const spotlightEffectsRef = useRef(spotlightEffects);
   const mosaicEffectsRef = useRef(mosaicEffects);
+  const subtitleCursorRef = useRef<ActiveIntervalCursor<Subtitle>>(createActiveIntervalCursor(allSubtitles));
+  const zoomCursorRef = useRef<ActiveIntervalCursor<ZoomEffect>>(createActiveIntervalCursor(zoomEffects));
+  const spotlightCursorRef = useRef<ActiveIntervalCursor<SpotlightEffect>>(createActiveIntervalCursor(spotlightEffects));
+  const mosaicCursorRef = useRef<ActiveIntervalCursor<MosaicEffect>>(createActiveIntervalCursor(mosaicEffects));
   
   const selectedZoomEffectRef = useRef(selectedZoomEffect);
   const selectedSpotlightEffectRef = useRef(selectedSpotlightEffect);
@@ -175,10 +242,22 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
   // Sync Props to Refs
   useEffect(() => { srcRef.current = src; }, [src]);
-  useEffect(() => { allSubtitlesRef.current = allSubtitles; }, [allSubtitles]);
-  useEffect(() => { zoomEffectsRef.current = zoomEffects; }, [zoomEffects]);
-  useEffect(() => { spotlightEffectsRef.current = spotlightEffects; }, [spotlightEffects]);
-  useEffect(() => { mosaicEffectsRef.current = mosaicEffects; }, [mosaicEffects]);
+  useEffect(() => {
+    allSubtitlesRef.current = allSubtitles;
+    subtitleCursorRef.current = createActiveIntervalCursor(allSubtitles);
+  }, [allSubtitles]);
+  useEffect(() => {
+    zoomEffectsRef.current = zoomEffects;
+    zoomCursorRef.current = createActiveIntervalCursor(zoomEffects);
+  }, [zoomEffects]);
+  useEffect(() => {
+    spotlightEffectsRef.current = spotlightEffects;
+    spotlightCursorRef.current = createActiveIntervalCursor(spotlightEffects);
+  }, [spotlightEffects]);
+  useEffect(() => {
+    mosaicEffectsRef.current = mosaicEffects;
+    mosaicCursorRef.current = createActiveIntervalCursor(mosaicEffects);
+  }, [mosaicEffects]);
   
   useEffect(() => { selectedZoomEffectRef.current = selectedZoomEffect; }, [selectedZoomEffect]);
   useEffect(() => { selectedSpotlightEffectRef.current = selectedSpotlightEffect; }, [selectedSpotlightEffect]);
@@ -197,8 +276,12 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useEffect(() => { introSrcRef.current = introSrc; }, [introSrc]);
   useEffect(() => { mainSrcRef.current = mainSrc; }, [mainSrc]);
   useEffect(() => { outroSrcRef.current = outroSrc; }, [outroSrc]);
-  useEffect(() => { activeClipsRef.current = activeClips; }, [activeClips]);
-  useEffect(() => { audioClipsRef.current = audioClips; }, [audioClips]);
+  useEffect(() => {
+    activeClipsRef.current = activeClips ? [...activeClips].sort((a, b) => a.offset - b.offset) : activeClips;
+  }, [activeClips]);
+  useEffect(() => {
+    audioClipsRef.current = audioClips ? [...audioClips].sort((a, b) => a.offset - b.offset) : audioClips;
+  }, [audioClips]);
 
   const { 
       subDragState,
@@ -241,6 +324,94 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       coverImageRef
   });
 
+  const syncCanvasSize = (canvas: HTMLCanvasElement | null, width: number, height: number) => {
+      if (!canvas || width <= 0 || height <= 0) return;
+
+      const nextWidth = alignEven(width);
+      const nextHeight = alignEven(height);
+
+      if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+          canvas.width = nextWidth;
+          canvas.height = nextHeight;
+      }
+  };
+
+  const syncExportCanvasSize = (width: number, height: number) => {
+      sourceDimensionsRef.current = { width, height };
+
+      const lockedSize = exportCanvasLockRef.current;
+      if (lockedSize) {
+          syncCanvasSize(exportCanvasRef.current, lockedSize.width, lockedSize.height);
+          return;
+      }
+
+      syncCanvasSize(exportCanvasRef.current, width, height);
+  };
+
+  const lockExportCanvasSize = (width: number, height: number) => {
+      const lockedSize = {
+          width: alignEven(width),
+          height: alignEven(height)
+      };
+
+      exportCanvasLockRef.current = lockedSize;
+      syncCanvasSize(exportCanvasRef.current, lockedSize.width, lockedSize.height);
+
+      return exportCanvasRef.current;
+  };
+
+  const releaseExportCanvasSize = () => {
+      exportCanvasLockRef.current = null;
+
+      if (sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
+          syncCanvasSize(exportCanvasRef.current, sourceDimensionsRef.current.width, sourceDimensionsRef.current.height);
+      }
+  };
+
+  const syncPreviewCanvasSize = () => {
+      if (!canvasRef.current || containerSize.width <= 0 || containerSize.height <= 0) return;
+
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      let width = Math.max(2, Math.round(containerSize.width * devicePixelRatio));
+      let height = Math.max(2, Math.round(containerSize.height * devicePixelRatio));
+      const longEdge = Math.max(width, height);
+
+      if (longEdge > PREVIEW_MAX_LONG_EDGE) {
+          const scale = PREVIEW_MAX_LONG_EDGE / longEdge;
+          width = Math.max(2, Math.round(width * scale));
+          height = Math.max(2, Math.round(height * scale));
+      }
+
+      syncCanvasSize(canvasRef.current, width, height);
+
+      if (exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) {
+          syncCanvasSize(exportCanvasRef.current, width, height);
+      }
+  };
+
+  const findActiveClip = (clips: Clip[] | undefined, time: number) => {
+      if (!clips || clips.length === 0) return null;
+
+      let low = 0;
+      let high = clips.length - 1;
+      let candidate: Clip | null = null;
+
+      while (low <= high) {
+          const mid = (low + high) >> 1;
+          const clip = clips[mid];
+
+          if (clip.offset <= time) {
+              candidate = clip;
+              low = mid + 1;
+          } else {
+              high = mid - 1;
+          }
+      }
+
+      if (!candidate) return null;
+      return time < getClipEnd(candidate) ? candidate : null;
+  };
+
   // --- MEDIA SYNC LOGIC ---
   const syncMediaState = (time: number) => {
       if (isExportingRef.current) return;
@@ -252,16 +423,12 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       ];
 
       // 1. Find the currently active clip
-      const activeClip = activeClipsRef.current?.find(c => {
-          const duration = (c.sourceEnd - c.sourceStart) / c.speed;
-          return time >= c.offset && time < c.offset + duration;
-      });
+      const activeClip = findActiveClip(activeClipsRef.current, time);
 
       // 2. Pre-roll Logic: Identify upcoming clip to warm up
       let prerollClip: Clip | null = null;
       if (isPlayingRef.current && activeClip) {
-          const activeDuration = (activeClip.sourceEnd - activeClip.sourceStart) / activeClip.speed;
-          const activeEnd = activeClip.offset + activeDuration;
+          const activeEnd = getClipEnd(activeClip);
           const timeRemaining = activeEnd - time;
           
           // If approaching the end (within 1 second), find immediate successor
@@ -332,10 +499,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           }
       });
 
-      const activeAudioClip = audioClipsRef.current?.find(c => {
-          const duration = (c.sourceEnd - c.sourceStart) / c.speed;
-          return time >= c.offset && time < c.offset + duration;
-      });
+      const activeAudioClip = findActiveClip(audioClipsRef.current, time);
 
       const audioEl = audioRef.current;
       if (audioEl && audioEl.src) {
@@ -368,10 +532,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   };
 
   const getFrameState = (time: number) => {
-      const clip = activeClipsRef.current?.find(c => {
-          const duration = (c.sourceEnd - c.sourceStart) / c.speed;
-          return time >= c.offset && time < c.offset + duration;
-      });
+      const clip = findActiveClip(activeClipsRef.current, time);
 
       if (!clip) return null;
 
@@ -417,30 +578,6 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       });
   };
 
-  const previewSeek = (time: number | null) => {
-      internalPreviewTimeRef.current = time;
-      if (time !== null) {
-          const state = getFrameState(time);
-          if (state && state.video && !state.src?.startsWith('color:') && !state.src?.startsWith('image:')) {
-              // OPTIMIZATION: Only seek if not already seeking
-              // This prevents "thrashing" the decoder with too many requests
-              if (!state.video.seeking) {
-                  state.video.currentTime = state.sourceTime;
-              }
-          }
-      }
-      renderFrame();
-  };
-
-  const renderFrameNow = () => renderFrame();
-  const getCanvas = () => canvasRef.current;
-
-  useImperativeHandle(ref, () => ({ 
-      startRecording, stopRecording, captureFrame, seekTo, renderFrame: renderFrameNow, getCanvas, previewSeek,
-      startOfflineSession: startOfflineSession as any, addVideoFrame: addVideoFrame as any, finishOfflineSession: finishOfflineSession as any,
-      encodeAudioAsM4a
-  }));
-
   useEffect(() => { autoCoverAttemptedRef.current = false; }, [mainSrc]);
 
   useEffect(() => {
@@ -452,6 +589,21 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
     });
     resizeObserver.observe(contentRef.current);
     return () => resizeObserver.disconnect();
+  }, []);
+
+  useEffect(() => {
+      const img = currentImageRef.current;
+      const handleLoad = () => {
+          if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+              syncExportCanvasSize(img.naturalWidth, img.naturalHeight);
+              if (!isPlayingRef.current && !isExportingRef.current) {
+                  renderFrame('preview');
+              }
+          }
+      };
+
+      img.addEventListener('load', handleLoad);
+      return () => img.removeEventListener('load', handleLoad);
   }, []);
 
   const handleContainerMouseMove = (e: React.MouseEvent) => {
@@ -487,139 +639,195 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       }
   };
 
-  const renderFrame = () => {
+  const renderFrame = (mode: 'preview' | 'export' = (isExportingRef.current ? 'export' : 'preview')) => {
     const currentGlobalTime = internalPreviewTimeRef.current ?? currentTimeRef.current;
-    
-    // Sync Media (Audio/Video Elements)
-    syncMediaState(currentGlobalTime);
+    const renderForExport = mode === 'export';
+
+    if (!renderForExport) {
+        syncMediaState(currentGlobalTime);
+    }
 
     const frameState = getFrameState(currentGlobalTime);
-    let video = frameState?.video || null;
-    let currentSrc = frameState?.src || null;
-    let currentSourceTime = frameState?.sourceTime ?? null;
-    let activeClipTiming = frameState ? { offset: frameState.clip.offset, sourceStart: frameState.clip.sourceStart, speed: frameState.clip.speed } : null;
+    const video = frameState?.video || null;
+    const currentSrc = frameState?.src || null;
+    const currentSourceTime = frameState?.sourceTime ?? null;
+    const activeClipTiming = frameState ? { offset: frameState.clip.offset, sourceStart: frameState.clip.sourceStart, speed: frameState.clip.speed } : null;
+    const canvas = renderForExport ? exportCanvasRef.current : canvasRef.current;
 
-    if (!isExportingRef.current && video && !currentSrc?.startsWith('color:') && !currentSrc?.startsWith('image:') && video.readyState < 2) {
-        requestRef.current = requestAnimationFrame(renderFrame);
+    if (!canvas) return;
+
+    if (!renderForExport && video && !currentSrc?.startsWith('color:') && !currentSrc?.startsWith('image:') && video.readyState < 2) {
         return;
     }
 
-    const subtitlesToRender = allSubtitlesRef.current.filter(s => currentGlobalTime >= s.start && currentGlobalTime < s.end);
-    
-    const zoom = zoomEffectsRef.current?.find(z => currentGlobalTime >= z.start && currentGlobalTime < z.end);
-    const spotlight = spotlightEffectsRef.current?.find(s => currentGlobalTime >= s.start && currentGlobalTime < s.end);
-    const mosaic = mosaicEffectsRef.current?.find(m => currentGlobalTime >= m.start && currentGlobalTime < m.end);
-    
-    // IMPORTANT: When exporting, we force the renderer to ignore "Selected" state.
-    // This ensures Zooms are applied (cropped/scaled) rather than rendered as "Edit Boxes".
+    const subtitlesToRender = resolveActiveItems(subtitleCursorRef.current, currentGlobalTime);
+    const activeZooms = resolveActiveItems(zoomCursorRef.current, currentGlobalTime);
+    const activeSpotlights = resolveActiveItems(spotlightCursorRef.current, currentGlobalTime);
+    const activeMosaics = resolveActiveItems(mosaicCursorRef.current, currentGlobalTime);
+    const zoom = activeZooms[activeZooms.length - 1];
+    const spotlight = activeSpotlights[activeSpotlights.length - 1];
+    const mosaic = activeMosaics[activeMosaics.length - 1];
+
     const playing = isPlayingRef.current;
-    const isExporting = isExportingRef.current;
-    
-    const selectedZoom = isExporting ? null : selectedZoomEffectRef.current;
-    const selectedSpotlight = isExporting ? null : selectedSpotlightEffectRef.current;
-    const editingCrop = isExporting ? false : isEditingCropRef.current;
-    
+    const selectedZoom = renderForExport ? null : selectedZoomEffectRef.current;
+    const selectedSpotlight = renderForExport ? null : selectedSpotlightEffectRef.current;
+    const editingCrop = renderForExport ? false : isEditingCropRef.current;
     const clipCrop = frameState?.clip?.crop;
-    
-    // Calculate Active Crop locally
+
     let activeClipCrop = clipCrop;
     if (!activeClipCrop && activeClipIdRef.current && activeClipsRef.current) {
         const found = activeClipsRef.current.find(c => c.id === activeClipIdRef.current);
         if (found) activeClipCrop = found.crop;
     }
-    
-    // If we are actively editing a crop (via Selection), we use the one from state (which might be updated via prop if not yet committed to clip)
-    // But for playback, we trust the clip data.
-    
+
     const crop = activeClipCrop;
     const bgColor = canvasBackgroundColorRef.current || '#000000';
-    const isEditingZoomState = selectedZoom && zoom && selectedZoom.id === zoom.id && !playing;
+    const isEditingZoomState = !!(selectedZoom && zoom && selectedZoom.id === zoom.id && !playing);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-    if (canvasRef.current) {
-      const canvas = canvasRef.current;
-      // PERFORMANCE FIX: Removed 'willReadFrequently: true' to allow GPU acceleration.
-      // This is crucial for high-resolution video playback performance.
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        let activeMediaType = frameState?.clip.mediaType;
-        const isCapturingCover = !coverImageRef.current && !autoCoverAttemptedRef.current && onAutoCover && activeMediaType === 'main';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        if (currentSourceTime !== null) {
-            if (currentSrc && currentSrc.startsWith('color:')) {
-                const color = currentSrc.split('color:')[1];
-                ctx.fillStyle = color;
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const activeMediaType = frameState?.clip.mediaType;
+    const isCapturingCover = !renderForExport && !coverImageRef.current && !autoCoverAttemptedRef.current && onAutoCover && activeMediaType === 'main';
+
+    if (currentSourceTime !== null) {
+        if (currentSrc && currentSrc.startsWith('color:')) {
+            const color = currentSrc.split('color:')[1];
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            if (!isEditingZoomState && !editingCrop) {
+                if (mosaic) renderMosaic(ctx, null, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, null, playing, color);
+                if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime);
+            }
+        } else if (currentSrc && currentSrc.startsWith('image:')) {
+            const realSrc = currentSrc.split('image:')[1];
+            const img = currentImageRef.current;
+
+            if (img.src !== realSrc) {
+                img.src = realSrc;
+            }
+
+            if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                if (sourceDimensionsRef.current.width !== img.naturalWidth || sourceDimensionsRef.current.height !== img.naturalHeight) {
+                    syncExportCanvasSize(img.naturalWidth, img.naturalHeight);
+                }
+                const cropInfo = renderVideoFrame(ctx, img, canvas.width, canvas.height, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
                 if (!isEditingZoomState && !editingCrop) {
-                    if (mosaic) renderMosaic(ctx, null, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, null, playing, color);
-                    if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime);
+                    if (mosaic) renderMosaic(ctx, img, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, cropInfo, playing);
+                    if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime, cropInfo);
                 }
-            } else if (currentSrc && currentSrc.startsWith('image:')) {
-                // --- IMAGE RENDERING ---
-                const realSrc = currentSrc.split('image:')[1];
-                const img = currentImageRef.current;
-                
-                // Lazy Load Image
-                if (img.src !== realSrc) {
-                    img.src = realSrc;
-                }
-                
-                // Draw if loaded
-                if (img.complete && img.naturalWidth > 0) {
-                    const cropInfo = renderVideoFrame(ctx, img, canvas.width, canvas.height, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
-                    if (!isEditingZoomState && !editingCrop) {
-                        if (mosaic) renderMosaic(ctx, img, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, cropInfo, playing);
-                        if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime, cropInfo);
-                    }
-                }
-            } else if (video && (video.readyState >= 2 || isExportingRef.current)) { 
-                 const cropInfo = renderVideoFrame(ctx, video, canvas.width, canvas.height, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
-                 if (!isEditingZoomState && !editingCrop) {
-                     if (mosaic) renderMosaic(ctx, video, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, cropInfo, playing);
-                     if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime, cropInfo);
-                 }
+            }
+        } else if (video && (video.readyState >= 2 || renderForExport)) {
+            if (video.videoWidth > 0 && video.videoHeight > 0 && (sourceDimensionsRef.current.width !== video.videoWidth || sourceDimensionsRef.current.height !== video.videoHeight)) {
+                syncExportCanvasSize(video.videoWidth, video.videoHeight);
+            }
+            const cropInfo = renderVideoFrame(ctx, video, canvas.width, canvas.height, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
+            if (!isEditingZoomState && !editingCrop) {
+                if (mosaic) renderMosaic(ctx, video, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, cropInfo, playing);
+                if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime, cropInfo);
             }
         }
+    }
 
-        renderSubtitles(ctx, subtitlesToRender, canvas.width, canvas.height, null);
+    renderSubtitles(ctx, subtitlesToRender, canvas.width, canvas.height, null, !renderForExport && playing);
 
-        if (isCapturingCover) {
-             const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-             if (dataUrl && dataUrl !== 'data:,') {
-                 if (onAutoCover) onAutoCover(dataUrl);
-                 autoCoverAttemptedRef.current = true;
-             }
+    if (isCapturingCover) {
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        if (dataUrl && dataUrl !== 'data:,') {
+            onAutoCover(dataUrl);
+            autoCoverAttemptedRef.current = true;
         }
-      }
-    }
-    if (previewCanvasRef.current && video && video.readyState >= 2 && !currentSrc?.startsWith('color:') && !currentSrc?.startsWith('image:')) {
-        renderPreview(previewCanvasRef.current, video, selectedZoom, zoom, selectedSpotlight, spotlight, playing, currentGlobalTime);
-    }
-    
-    if (!isExportingRef.current) {
-        requestRef.current = requestAnimationFrame(renderFrame);
     }
   };
 
-  useEffect(() => {
-    requestRef.current = requestAnimationFrame(renderFrame);
-    return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
-  }, []); 
+  const renderLoop = () => {
+    renderFrame('preview');
+    if (isPlayingRef.current && !isExportingRef.current) {
+        requestRef.current = requestAnimationFrame(renderLoop);
+    }
+  };
 
-  // ... (Rest of metadata loading logic)
+  const previewSeek = (time: number | null) => {
+      internalPreviewTimeRef.current = time;
+      if (time !== null) {
+          const state = getFrameState(time);
+          if (state && state.video && !state.src?.startsWith('color:') && !state.src?.startsWith('image:') && !state.video.seeking) {
+              state.video.currentTime = state.sourceTime;
+          }
+      }
+      renderFrame('preview');
+  };
+
+  const renderFrameNow = () => renderFrame(isExportingRef.current ? 'export' : 'preview');
+  const getCanvas = () => {
+      if ((exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) && sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
+          syncExportCanvasSize(sourceDimensionsRef.current.width, sourceDimensionsRef.current.height);
+      }
+      return (isExportingRef.current || exportCanvasLockRef.current) ? exportCanvasRef.current : canvasRef.current;
+  };
+
+  useImperativeHandle(ref, () => ({ 
+      startRecording, stopRecording, captureFrame, seekTo, renderFrame: renderFrameNow, getCanvas, previewSeek,
+      startOfflineSession: startOfflineSession as any, addVideoFrame: addVideoFrame as any, finishOfflineSession: finishOfflineSession as any,
+      encodeAudioAsM4a,
+      prepareExportCanvas: lockExportCanvasSize as any,
+      releaseExportCanvas: releaseExportCanvasSize as any
+  }));
+
+  useEffect(() => {
+      syncPreviewCanvasSize();
+  }, [containerSize.width, containerSize.height, aspectRatio]);
+
+  useEffect(() => {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+
+      if (isPlaying && !isExporting) {
+          requestRef.current = requestAnimationFrame(renderLoop);
+      } else if (!isExporting && internalPreviewTimeRef.current === null) {
+          renderFrame('preview');
+      }
+
+      return () => {
+          if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      };
+  }, [isPlaying, isExporting]);
+
+  useEffect(() => {
+      if (isPlaying || isExporting || internalPreviewTimeRef.current !== null) return;
+      renderFrame('preview');
+  }, [
+      currentTime,
+      src,
+      introSrc,
+      mainSrc,
+      outroSrc,
+      allSubtitles,
+      zoomEffects,
+      spotlightEffects,
+      mosaicEffects,
+      selectedSubtitleId,
+      selectedZoomEffect,
+      selectedSpotlightEffect,
+      selectedMosaicEffect,
+      activeClipId,
+      activeClips,
+      canvasBackgroundColor,
+      containerSize.width,
+      containerSize.height
+  ]);
+
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
     const video = e.currentTarget;
     const isMain = video === mainVideoRef.current;
-    if (video && canvasRef.current) {
-        if (isMain || (!mainSrc && video === introVideoRef.current) || (!mainSrc && !introSrc && video === outroVideoRef.current)) {
-            onDurationChange(video.duration); 
-            canvasRef.current.width = video.videoWidth;
-            canvasRef.current.height = video.videoHeight;
-            // Removed initial crop aspect ratio logic here as it depends on activeClip which is now internal
+    if (isMain || (!mainSrc && video === introVideoRef.current) || (!mainSrc && !introSrc && video === outroVideoRef.current)) {
+        onDurationChange(video.duration);
+        syncExportCanvasSize(video.videoWidth, video.videoHeight);
+        if (!isPlayingRef.current && !isExportingRef.current) {
+            renderFrame('preview');
         }
     }
   };

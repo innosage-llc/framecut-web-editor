@@ -95,6 +95,60 @@ export const useCanvasRecorder = ({ canvasRef, introRef, mainRef, outroRef, audi
     const muxerRef = useRef<any>(null);
     const videoEncoderRef = useRef<VideoEncoder | null>(null);
     const audioEncoderRef = useRef<AudioEncoder | null>(null);
+    const videoEncoderErrorRef = useRef<Error | null>(null);
+
+    const alignEven = (value: number) => Math.max(2, Math.round(value / 2) * 2);
+
+    const buildVideoEncoderCandidates = (width: number, height: number, fps: number) => {
+        const pixelCount = width * height;
+        const bitrate = pixelCount > 2_073_600 ? 12_000_000 : pixelCount > 921_600 ? 8_000_000 : 5_000_000;
+
+        const codecCandidates =
+            pixelCount > 2_073_600
+                ? ['avc1.420033', 'avc1.4d0033', 'avc1.640033']
+                : pixelCount > 921_600
+                    ? ['avc1.42002a', 'avc1.4d002a', 'avc1.64002a']
+                    : ['avc1.42001f', 'avc1.4d001f', 'avc1.64001f'];
+
+        return codecCandidates.map(codec => ({
+            codec,
+            width,
+            height,
+            bitrate,
+            framerate: fps
+        }));
+    };
+
+    const resolveVideoEncoderConfig = async (width: number, height: number, fps: number) => {
+        const maxLongEdge = 1920;
+        const initialScale = Math.min(1, maxLongEdge / Math.max(width, height));
+        const scaleCandidates = [initialScale, 0.85, 0.75, 0.67, 0.5]
+            .map(scale => Math.min(1, scale))
+            .filter((scale, index, arr) => scale > 0 && arr.indexOf(scale) === index);
+
+        for (const scale of scaleCandidates) {
+            const scaledWidth = alignEven(width * scale);
+            const scaledHeight = alignEven(height * scale);
+            const candidates = buildVideoEncoderCandidates(scaledWidth, scaledHeight, fps);
+
+            if (typeof VideoEncoder.isConfigSupported !== 'function') {
+                return candidates[0];
+            }
+
+            for (const candidate of candidates) {
+                try {
+                    const support = await VideoEncoder.isConfigSupported(candidate);
+                    if (support.supported) {
+                        return support.config;
+                    }
+                } catch {
+                    // Try the next codec/size combination.
+                }
+            }
+        }
+
+        throw new Error(`No supported H.264 export configuration found for ${width}x${height} at ${fps}fps.`);
+    };
 
     // Standard Real-time Recording (Legacy stub)
     const startRecording = async (options?: { audioOnly?: boolean; format?: 'mp4' | 'webm' }) => {
@@ -108,13 +162,16 @@ export const useCanvasRecorder = ({ canvasRef, introRef, mainRef, outroRef, audi
     // --- NEW OFFLINE EXPORT API ---
 
     const startOfflineSession = async (width: number, height: number, fps: number, audioBuffer: AudioBuffer | null) => {
+        const videoConfig = await resolveVideoEncoderConfig(width, height, fps);
+        videoEncoderErrorRef.current = null;
+
         // 1. Setup Muxer
         const muxer = new Muxer({
             target: new ArrayBufferTarget(),
             video: {
                 codec: 'avc', // H.264
-                width,
-                height
+                width: videoConfig.width,
+                height: videoConfig.height
             },
             audio: audioBuffer ? {
                 codec: 'aac',
@@ -128,24 +185,14 @@ export const useCanvasRecorder = ({ canvasRef, introRef, mainRef, outroRef, audi
         // 2. Setup Video Encoder
         const videoEncoder = new VideoEncoder({
             output: (chunk: EncodedVideoChunk, meta: any) => muxer.addVideoChunk(chunk, meta),
-            error: (e: any) => console.error("VideoEncoder error", e)
+            error: (e: any) => {
+                const error = e instanceof Error ? e : new Error(String(e));
+                videoEncoderErrorRef.current = error;
+                console.error("VideoEncoder error", error);
+            }
         });
-        
-        // Determine suitable H.264 Level
-        const pixelCount = width * height;
-        const isHighRes = pixelCount > 2_073_600; // > 1920x1080
-        
-        // Main Profile (4d), Constraint 00, Level 5.1 (33) or 4.2 (2a)
-        const codecString = isHighRes ? 'avc1.4d0033' : 'avc1.4d002a';
-        const bitrate = isHighRes ? 12_000_000 : 5_000_000;
 
-        videoEncoder.configure({
-            codec: codecString, 
-            width,
-            height,
-            bitrate: bitrate,
-            framerate: fps
-        });
+        videoEncoder.configure(videoConfig);
         videoEncoderRef.current = videoEncoder;
 
         // 3. Setup Audio Encoder & Encode Immediately
@@ -169,6 +216,11 @@ export const useCanvasRecorder = ({ canvasRef, introRef, mainRef, outroRef, audi
             // Clean up audio encoder ref since it is closed in helper
             audioEncoderRef.current = null;
         }
+
+        return {
+            width: videoConfig.width,
+            height: videoConfig.height
+        };
     };
 
     const addVideoFrame = async (canvas: HTMLCanvasElement, timestampUs: number, isKeyFrame: boolean) => {
@@ -176,7 +228,7 @@ export const useCanvasRecorder = ({ canvasRef, introRef, mainRef, outroRef, audi
         if (!encoder) return;
         
         if (encoder.state === 'closed') {
-            throw new Error("VideoEncoder is closed. The export failed, likely due to unsupported resolution or codec settings.");
+            throw videoEncoderErrorRef.current || new Error("VideoEncoder is closed. The export failed, likely due to unsupported resolution or codec settings.");
         }
         
         const frame = new VideoFrame(canvas, { timestamp: timestampUs });
