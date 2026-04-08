@@ -169,6 +169,9 @@ export interface PlayerRef {
   // New Methods for Offline Export
   renderFrame: () => void;
   getCanvas: () => HTMLCanvasElement | null;
+  prepareExportPlayback: (clip: Clip | null) => Promise<'video' | 'static' | 'empty'>;
+  syncExportPlayback: (sourceTime: number) => Promise<void>;
+  stopExportPlayback: () => void;
   // New Method for Hover Preview
   previewSeek: (time: number | null) => void;
   // Audio Export
