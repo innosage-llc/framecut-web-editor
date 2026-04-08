@@ -448,7 +448,6 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       }
 
       const handleSeeked = () => {
-          video.removeEventListener('seeked', handleSeeked);
           resolve();
       };
 
@@ -467,19 +466,16 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const resolveClipVideoState = (clip: Clip | null) => {
       if (!clip) return null;
 
-      if (clip.mediaType === 'intro') {
-          return { video: introVideoRef.current, src: introSrcRef.current || null };
+      switch (clip.mediaType) {
+          case 'intro':
+              return { video: introVideoRef.current, src: introSrcRef.current || null };
+          case 'main':
+              return { video: mainVideoRef.current, src: mainSrcRef.current || null };
+          case 'outro':
+              return { video: outroVideoRef.current, src: outroSrcRef.current || null };
+          default:
+              return null;
       }
-
-      if (clip.mediaType === 'main') {
-          return { video: mainVideoRef.current, src: mainSrcRef.current || null };
-      }
-
-      if (clip.mediaType === 'outro') {
-          return { video: outroVideoRef.current, src: outroSrcRef.current || null };
-      }
-
-      return null;
   };
 
   // --- MEDIA SYNC LOGIC ---
@@ -938,10 +934,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useImperativeHandle(ref, () => ({ 
       startRecording, stopRecording, captureFrame, seekTo, renderFrame: renderFrameNow, getCanvas, previewSeek,
       prepareExportPlayback, syncExportPlayback, stopExportPlayback,
-      startOfflineSession: startOfflineSession as any, addVideoFrame: addVideoFrame as any, finishOfflineSession: finishOfflineSession as any,
+      startOfflineSession, addVideoFrame, finishOfflineSession,
       encodeAudioAsM4a,
-      prepareExportCanvas: lockExportCanvasSize as any,
-      releaseExportCanvas: releaseExportCanvasSize as any
+      prepareExportCanvas: lockExportCanvasSize,
+      releaseExportCanvas: releaseExportCanvasSize
   }));
 
   useEffect(() => {

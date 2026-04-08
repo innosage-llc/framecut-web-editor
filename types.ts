@@ -169,6 +169,11 @@ export interface PlayerRef {
   // New Methods for Offline Export
   renderFrame: () => void;
   getCanvas: () => HTMLCanvasElement | null;
+  startOfflineSession: (width: number, height: number, fps: number, audioBuffer: AudioBuffer | null) => Promise<{ width: number; height: number }>;
+  addVideoFrame: (canvas: HTMLCanvasElement, timestampUs: number, isKeyFrame: boolean) => Promise<void>;
+  finishOfflineSession: () => Promise<Blob>;
+  prepareExportCanvas?: (width: number, height: number) => HTMLCanvasElement;
+  releaseExportCanvas?: () => void;
   prepareExportPlayback: (clip: Clip | null) => Promise<'video' | 'static' | 'empty'>;
   syncExportPlayback: (sourceTime: number) => Promise<void>;
   stopExportPlayback: () => void;

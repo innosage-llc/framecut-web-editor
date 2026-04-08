@@ -98,13 +98,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const width = Math.floor(canvas.width / 2) * 2;
             const height = Math.floor(canvas.height / 2) * 2;
             const fps = 30;
-            const recorder = playerRef.current as PlayerRef & {
-                startOfflineSession: (width: number, height: number, fps: number, audioBuffer: AudioBuffer | null) => Promise<{ width: number; height: number }>;
-                addVideoFrame: (canvas: HTMLCanvasElement, timestampUs: number, isKeyFrame: boolean) => Promise<void>;
-                finishOfflineSession: () => Promise<Blob>;
-                prepareExportCanvas?: (width: number, height: number) => HTMLCanvasElement;
-                releaseExportCanvas?: () => void;
-            };
+            const recorder = playerRef.current;
 
             const exportConfig = await recorder.startOfflineSession(width, height, fps, audioBuffer);
             let exportCanvas = canvas;
@@ -173,7 +167,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             alert('Export failed: ' + e.message);
             setState(prev => ({ ...prev, isExporting: false, isExportingAudio: false }));
         } finally {
-            const recorder = playerRef.current as (PlayerRef & { releaseExportCanvas?: () => void }) | null;
+            const recorder = playerRef.current;
             playerRef.current?.stopExportPlayback();
             recorder?.releaseExportCanvas?.();
         }
