@@ -205,6 +205,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const sourceDimensionsRef = useRef({ width: 0, height: 0 });
   const exportCanvasLockRef = useRef<{ width: number; height: number } | null>(null);
+  const exportPlaybackVideoRef = useRef<HTMLVideoElement | null>(null);
+  const exportPlaybackModeRef = useRef<'playback' | 'seek' | null>(null);
   
   // Refs for Props (To avoid stale closures in RAF)
   const srcRef = useRef(src);
@@ -412,6 +414,70 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       return time < getClipEnd(candidate) ? candidate : null;
   };
 
+  const waitForMediaReady = (video: HTMLVideoElement, minimumReadyState = 2) => new Promise<void>((resolve, reject) => {
+      if (video.readyState >= minimumReadyState) {
+          resolve();
+          return;
+      }
+
+      const readyEvent = minimumReadyState >= 2 ? 'canplay' : 'loadedmetadata';
+
+      const cleanup = () => {
+          video.removeEventListener(readyEvent, handleReady);
+          video.removeEventListener('error', handleError);
+      };
+
+      const handleReady = () => {
+          cleanup();
+          resolve();
+      };
+
+      const handleError = () => {
+          cleanup();
+          reject(video.error || new Error('Failed to prepare video for export.'));
+      };
+
+      video.addEventListener(readyEvent, handleReady, { once: true });
+      video.addEventListener('error', handleError, { once: true });
+  });
+
+  const waitForSeek = (video: HTMLVideoElement, targetTime: number) => new Promise<void>((resolve) => {
+      if (Math.abs(video.currentTime - targetTime) < 0.05) {
+          resolve();
+          return;
+      }
+
+      const handleSeeked = () => {
+          resolve();
+      };
+
+      video.addEventListener('seeked', handleSeeked, { once: true });
+      video.currentTime = targetTime;
+  });
+
+  const pauseAllExportVideos = () => {
+      [introVideoRef.current, mainVideoRef.current, outroVideoRef.current].forEach(video => {
+          if (video && !video.paused) {
+              video.pause();
+          }
+      });
+  };
+
+  const resolveClipVideoState = (clip: Clip | null) => {
+      if (!clip) return null;
+
+      switch (clip.mediaType) {
+          case 'intro':
+              return { video: introVideoRef.current, src: introSrcRef.current || null };
+          case 'main':
+              return { video: mainVideoRef.current, src: mainSrcRef.current || null };
+          case 'outro':
+              return { video: outroVideoRef.current, src: outroSrcRef.current || null };
+          default:
+              return null;
+      }
+  };
+
   // --- MEDIA SYNC LOGIC ---
   const syncMediaState = (time: number) => {
       if (isExportingRef.current) return;
@@ -576,6 +642,101 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           video!.addEventListener('seeked', onSeeked, { once: true });
           video!.currentTime = sourceTime;
       });
+  };
+
+  const prepareExportPlayback = async (clip: Clip | null): Promise<'video' | 'static' | 'empty'> => {
+      pauseAllExportVideos();
+      exportPlaybackVideoRef.current = null;
+      exportPlaybackModeRef.current = null;
+
+      if (!clip) {
+          return 'empty';
+      }
+
+      const resolved = resolveClipVideoState(clip);
+      if (!resolved?.video || !resolved.src || resolved.src.startsWith('color:') || resolved.src.startsWith('image:')) {
+          return 'static';
+      }
+
+      const { video } = resolved;
+
+      await waitForMediaReady(video, 1);
+      await waitForSeek(video, clip.sourceStart);
+
+      let mode: 'playback' | 'seek' = 'seek';
+      video.muted = true;
+      video.playbackRate = clip.speed;
+
+      try {
+          await waitForMediaReady(video, 2);
+          await video.play();
+          mode = 'playback';
+      } catch {
+          video.pause();
+      }
+
+      exportPlaybackVideoRef.current = video;
+      exportPlaybackModeRef.current = mode;
+
+      return 'video';
+  };
+
+  const syncExportPlayback = async (sourceTime: number): Promise<void> => {
+      const video = exportPlaybackVideoRef.current;
+      const mode = exportPlaybackModeRef.current;
+
+      if (!video || !mode) return;
+
+      if (mode === 'seek') {
+          await waitForSeek(video, sourceTime);
+          return;
+      }
+
+      const tolerance = 1 / 240;
+      if (video.currentTime + tolerance >= sourceTime || video.paused || video.ended) {
+          return;
+      }
+
+      await new Promise<void>((resolve) => {
+          let settled = false;
+          let timeoutId: number | null = null;
+
+          const finish = () => {
+              if (settled) return;
+              settled = true;
+              if (timeoutId !== null) {
+                  window.clearTimeout(timeoutId);
+              }
+              resolve();
+          };
+
+          const onFrame = () => {
+              if (video.currentTime + tolerance >= sourceTime || video.paused || video.ended) {
+                  finish();
+                  return;
+              }
+
+              if (typeof video.requestVideoFrameCallback === 'function') {
+                  video.requestVideoFrameCallback(onFrame);
+              } else {
+                  requestAnimationFrame(onFrame);
+              }
+          };
+
+          timeoutId = window.setTimeout(finish, 1000);
+
+          if (typeof video.requestVideoFrameCallback === 'function') {
+              video.requestVideoFrameCallback(onFrame);
+          } else {
+              requestAnimationFrame(onFrame);
+          }
+      });
+  };
+
+  const stopExportPlayback = () => {
+      pauseAllExportVideos();
+      exportPlaybackVideoRef.current = null;
+      exportPlaybackModeRef.current = null;
   };
 
   useEffect(() => { autoCoverAttemptedRef.current = false; }, [mainSrc]);
@@ -772,10 +933,11 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
   useImperativeHandle(ref, () => ({ 
       startRecording, stopRecording, captureFrame, seekTo, renderFrame: renderFrameNow, getCanvas, previewSeek,
-      startOfflineSession: startOfflineSession as any, addVideoFrame: addVideoFrame as any, finishOfflineSession: finishOfflineSession as any,
+      prepareExportPlayback, syncExportPlayback, stopExportPlayback,
+      startOfflineSession, addVideoFrame, finishOfflineSession,
       encodeAudioAsM4a,
-      prepareExportCanvas: lockExportCanvasSize as any,
-      releaseExportCanvas: releaseExportCanvasSize as any
+      prepareExportCanvas: lockExportCanvasSize,
+      releaseExportCanvas: releaseExportCanvasSize
   }));
 
   useEffect(() => {
@@ -793,6 +955,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
       return () => {
           if (requestRef.current) cancelAnimationFrame(requestRef.current);
+          stopExportPlayback();
       };
   }, [isPlaying, isExporting]);
 

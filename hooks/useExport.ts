@@ -1,6 +1,5 @@
-
-import React, { useCallback, useEffect, RefObject, useRef } from 'react';
-import { ExtendedEditorState, PlayerRef } from '../types';
+import React, { useCallback, RefObject } from 'react';
+import { Clip, ExtendedEditorState, PlayerRef } from '../types';
 import { renderProjectAudio, audioBufferToWav } from '../utils/audioRenderer';
 
 interface UseExportProps {
@@ -10,166 +9,168 @@ interface UseExportProps {
     currentTimeRef: React.MutableRefObject<number>;
 }
 
-export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExportProps) => {
-    
-    // Prevent double-triggering export finish
-    const isFinishingRef = useRef(false);
+const getClipDuration = (clip: Clip) => (clip.sourceEnd - clip.sourceStart) / clip.speed;
+const getClipEnd = (clip: Clip) => clip.offset + getClipDuration(clip);
 
+const sanitizeBaseName = (fileName: string | null) => (
+    (fileName || 'project').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'project'
+);
+
+const downloadBlob = (blob: Blob, baseName: string, extension: string) => {
+    if (blob.size <= 0) return;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    a.download = `framecut-${baseName}-${timestamp}.${extension}`;
+    document.body.appendChild(a);
+    a.click();
+
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 1000);
+};
+
+const findActiveClipAtTime = (clips: Clip[], time: number, cursor: { index: number }) => {
+    while (cursor.index < clips.length && time >= getClipEnd(clips[cursor.index])) {
+        cursor.index += 1;
+    }
+
+    const clip = clips[cursor.index];
+    if (!clip) return null;
+
+    if (time < clip.offset) return null;
+    return time < getClipEnd(clip) ? clip : null;
+};
+
+export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExportProps) => {
     const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a') => {
         if (state.clips.length === 0 && state.audioClips.length === 0) return;
         if (!playerRef.current) return;
 
-        // 1. Reset state
+        const player = playerRef.current;
+        const baseName = sanitizeBaseName(state.fileName);
+
         currentTimeRef.current = 0;
-        setState(prev => ({ 
-            ...prev, 
-            isPlaying: false, 
-            currentTime: 0, 
+        setState(prev => ({
+            ...prev,
+            isPlaying: false,
+            currentTime: 0,
             exportProgress: 0,
-            isExporting: true, 
-            isExportingAudio: audioOnly 
+            isExporting: true,
+            isExportingAudio: audioOnly
         }));
 
         try {
-            // 2. Prepare Audio (Render complete timeline to buffer)
             const audioBuffer = await renderProjectAudio(state);
-            
+
             if (audioOnly) {
                 if (!audioBuffer) {
-                    throw new Error("Could not generate audio buffer. Is the project empty or muted?");
+                    throw new Error('Could not generate audio buffer. Is the project empty or muted?');
                 }
-                
+
                 setState(prev => ({ ...prev, exportProgress: 50 }));
-                let blob: Blob;
-                let ext = 'wav';
 
                 if (format === 'm4a') {
-                    console.log("Encoding AAC (M4A)...");
-                    blob = await playerRef.current.encodeAudioAsM4a(audioBuffer);
-                    ext = 'm4a';
+                    downloadBlob(await player.encodeAudioAsM4a(audioBuffer), baseName, 'm4a');
                 } else {
-                    // Default to WAV
-                    console.log("Encoding WAV...");
-                    blob = audioBufferToWav(audioBuffer);
-                }
-                
-                if (blob.size > 0) {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = url;
-                    const baseName = (state.fileName || 'project').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'project';
-                    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-                    a.download = `framecut-${baseName}-${timestamp}.${ext}`;
-                    document.body.appendChild(a);
-                    a.click();
-                    setTimeout(() => {
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                    }, 1000);
+                    downloadBlob(audioBufferToWav(audioBuffer), baseName, 'wav');
                 }
 
-                setState(prev => ({ 
-                    ...prev, 
-                    isExporting: false, 
-                    isExportingAudio: false, 
-                    currentTime: 0, 
-                    exportProgress: 100, 
-                    showSuccessToast: true 
+                setState(prev => ({
+                    ...prev,
+                    isExporting: false,
+                    isExportingAudio: false,
+                    currentTime: 0,
+                    exportProgress: 100,
+                    showSuccessToast: true
                 }));
                 setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false })), 3000);
                 return;
             }
 
-            // 3. Initialize Offline Session (Video)
-            // Determine dimensions from canvas
-            const canvas = playerRef.current.getCanvas();
-            if (!canvas) throw new Error("No canvas found");
-            
-            // Align dimensions to 2 (H.264 requirement usually)
+            const canvas = player.getCanvas();
+            if (!canvas) throw new Error('No canvas found');
+
             const width = Math.floor(canvas.width / 2) * 2;
             const height = Math.floor(canvas.height / 2) * 2;
             const fps = 30;
-            
-            // Cast to any because the new methods are dynamically added via useImperativeHandle
-            const recorder = playerRef.current as any;
-            
+            const recorder = playerRef.current;
+
             const exportConfig = await recorder.startOfflineSession(width, height, fps, audioBuffer);
             let exportCanvas = canvas;
             if (exportConfig && recorder.prepareExportCanvas) {
                 exportCanvas = recorder.prepareExportCanvas(exportConfig.width, exportConfig.height);
             }
 
-            // 4. Frame Loop
             const duration = state.duration;
             const totalFrames = Math.ceil(duration * fps);
-            
+            const sortedClips = [...state.clips].sort((a, b) => a.offset - b.offset);
+            const clipCursor = { index: 0 };
+            let activeClipId: string | null = null;
+            let activeClipMode: 'video' | 'static' | 'empty' = 'empty';
+            let lastUiUpdate = performance.now();
+
             for (let i = 0; i <= totalFrames; i++) {
                 const time = i / fps;
-                
-                // Update State Time (Syncs React Contexts)
+                const activeClip = findActiveClipAtTime(sortedClips, time, clipCursor);
+
+                if (activeClip?.id !== activeClipId) {
+                    activeClipMode = await player.prepareExportPlayback(activeClip);
+                    activeClipId = activeClip?.id ?? null;
+                }
+
                 currentTimeRef.current = time;
-                setState(prev => ({ ...prev, currentTime: time, exportProgress: Math.floor((i / totalFrames) * 100) }));
-                
-                // Seek Video Elements (Wait for seeked event)
-                await playerRef.current.seekTo(time);
-                
-                // Force Render to Canvas (Synchronous-ish)
-                playerRef.current.renderFrame();
-                
-                // Add Frame to Encoder
+
+                if (activeClip && activeClipMode === 'video') {
+                    const sourceTime = activeClip.sourceStart + ((time - activeClip.offset) * activeClip.speed);
+                    await player.syncExportPlayback(sourceTime);
+                } else if (activeClipMode !== 'video') {
+                    await player.seekTo(time);
+                }
+
+                player.renderFrame();
+
                 const timestampUs = time * 1_000_000;
-                // Keyframe every 2 seconds
                 const isKeyFrame = i % (fps * 2) === 0;
-                
                 await recorder.addVideoFrame(exportCanvas, timestampUs, isKeyFrame);
-                
-                // Allow UI to breathe slightly
-                await new Promise(r => setTimeout(r, 0));
+
+                const shouldUpdateUi = i === totalFrames || performance.now() - lastUiUpdate >= 150;
+                if (shouldUpdateUi) {
+                    lastUiUpdate = performance.now();
+                    const progress = Math.floor((i / totalFrames) * 100);
+                    setState(prev => (
+                        prev.exportProgress === progress && prev.currentTime === time
+                            ? prev
+                            : { ...prev, currentTime: time, exportProgress: progress }
+                    ));
+                }
             }
 
-            console.log('Recorder stopped, generating blob...');
-
-            // 5. Finalize
             const blob = await recorder.finishOfflineSession();
-            
-            // 6. Download
-            if (blob.size > 0) {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = url;
-                const baseName = (state.fileName || 'project').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'project';
-                const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-                a.download = `framecut-${baseName}-${timestamp}.mp4`;
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(() => {
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }, 1000);
-            }
+            downloadBlob(blob, baseName, 'mp4');
 
-            // 7. Cleanup
-            setState(prev => ({ 
-                ...prev, 
-                isExporting: false, 
-                isExportingAudio: false, 
-                currentTime: 0, 
-                exportProgress: 100, 
-                showSuccessToast: true 
+            setState(prev => ({
+                ...prev,
+                isExporting: false,
+                isExportingAudio: false,
+                currentTime: 0,
+                exportProgress: 100,
+                showSuccessToast: true
             }));
             setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false })), 3000);
-
         } catch (e: any) {
-            console.error("Offline Export Failed", e);
-            alert("Export failed: " + e.message);
-            setState(prev => ({ ...prev, isExporting: false }));
+            console.error('Offline Export Failed', e);
+            alert('Export failed: ' + e.message);
+            setState(prev => ({ ...prev, isExporting: false, isExportingAudio: false }));
         } finally {
-            const recorder = playerRef.current as any;
+            const recorder = playerRef.current;
+            playerRef.current?.stopExportPlayback();
             recorder?.releaseExportCanvas?.();
         }
-
     }, [state, setState, currentTimeRef, playerRef]);
 
     return {
