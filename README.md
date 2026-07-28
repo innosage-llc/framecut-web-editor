@@ -104,8 +104,8 @@ Tests are configured in [playwright.config.ts](file:///Users/weijingliunyu/IdeaP
 This project is optimized for deployment on **Cloudflare Pages**. We use a two-tier deployment strategy to balance speed and safety:
 
 ### 1. Staging (Automatic)
-Every push to the `master` (or `main`) branch is automatically built and deployed. This allows for rapid testing of new features.
-- **Workflow**: `git push origin master`
+Every push to the `main` branch is automatically built and deployed. This allows for rapid testing of new features.
+- **Workflow**: `git push origin main`
 - **Host**: Cloudflare Pages (Managed Git Integration)
 
 ### 2. Production (Tag-Driven)
@@ -122,4 +122,3 @@ npm run deploy:prod
 
 ### Deployment Guide
 For detailed instructions on setting up Cloudflare Pages, custom domains, and the local release script, please refer to the [Cloudflare Deployment Guide](docs/feature/cloudflare-deployment.md).
-
