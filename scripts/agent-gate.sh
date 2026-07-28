@@ -241,16 +241,7 @@ post_hold_check() {
 }
 
 if [ "$TRUST" = "medium" ]; then
-    echo -e "${YELLOW}⏳ Trust Tier MEDIUM. Starting 3-minute hold (180s)...${NC}"
-    REMAINING=180
-    while [ "$REMAINING" -gt 0 ]; do
-        echo -e "   ${BLUE}⏱️  $((REMAINING / 60))m $((REMAINING % 60))s remaining...${NC}"
-        SLEEP_TIME=$((REMAINING > 30 ? 30 : REMAINING))
-        sleep "$SLEEP_TIME"
-        REMAINING=$((REMAINING - SLEEP_TIME))
-    done
-    
-    echo -e "   ${YELLOW}🔍 Hold complete. Running post-hold checks...${NC}"
+    echo -e "${YELLOW}🔍 Trust Tier MEDIUM. Running final checks...${NC}"
     post_hold_check 1
 fi
 
