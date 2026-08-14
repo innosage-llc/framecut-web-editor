@@ -166,6 +166,8 @@ const App: React.FC = () => {
                 </div>
                 <a
                     href="/download/mac"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-500/20 hover:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                     aria-label="Download FrameCut for macOS"
                     title="Download FrameCut for macOS 26 on Apple silicon"
