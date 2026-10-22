@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { Selection, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip, ExtendedEditorState } from '../types';
+import { BackgroundFrame, DEFAULT_BACKGROUND_FRAME, GRADIENT_PRESETS, gradientCss, imageFileToDataUrl } from '../utils/backgroundFrame';
 import { Type, Move, Lightbulb, Grid3X3, Palette, Bold, Italic, Settings, Layout, Monitor, X, MousePointer2, PenLine, AlignCenter } from 'lucide-react';
 
 interface PropertyHUDProps {
@@ -14,6 +15,7 @@ interface PropertyHUDProps {
     // Project Settings
     projectName?: string | null;
     canvasBackgroundColor?: string;
+    backgroundFrame?: BackgroundFrame;
     aspectRatio?: number;
 
     onUpdateSubtitle: (updates: Partial<Subtitle>) => void;
@@ -25,6 +27,65 @@ interface PropertyHUDProps {
     onDeselect: () => void;
 }
 
+const BackgroundFrameControls: React.FC<{
+    frame: BackgroundFrame;
+    canvasBackgroundColor: string;
+    onChange: (frame: BackgroundFrame) => void;
+}> = ({ frame, canvasBackgroundColor, onChange }) => {
+    const update = (patch: Partial<BackgroundFrame>) => onChange({ ...frame, ...patch });
+    const swatch = (active: boolean) => `w-7 h-7 rounded border-2 ${active ? 'border-blue-500' : 'border-transparent hover:border-zinc-500'}`;
+    const slider = (label: string, key: 'padding' | 'cornerRadius' | 'shadow', max: number, step: number) => (
+        <label className="flex items-center gap-2 text-[10px] text-zinc-400">
+            <span className="w-14">{label}</span>
+            <input
+                type="range" min={0} max={max} step={step} value={frame[key]}
+                aria-label={`Frame ${label}`}
+                onChange={e => update({ [key]: Number(e.target.value) } as Partial<BackgroundFrame>)}
+                className="flex-1"
+            />
+            <span className="w-8 text-right font-mono text-zinc-300">{Math.round((frame[key] / max) * 100)}</span>
+        </label>
+    );
+    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+            update({ wallpaper: { kind: 'image', dataUrl: await imageFileToDataUrl(file) } });
+        } catch (err) {
+            console.error('Wallpaper upload failed', err);
+        }
+    };
+
+    return (
+        <div className="space-y-2" data-testid="background-frame-controls">
+            <label className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold flex items-center gap-1"><Layout size={10}/> Frame</label>
+            <div className="flex flex-wrap gap-1">
+                <button title="Solid colour" aria-label="Wallpaper: solid colour" onClick={() => update({ wallpaper: { kind: 'color' } })}
+                    className={swatch(frame.wallpaper.kind === 'color')} style={{ backgroundColor: canvasBackgroundColor }} />
+                {GRADIENT_PRESETS.map(g => (
+                    <button key={g.id} title={g.label} aria-label={`Wallpaper: ${g.label}`}
+                        onClick={() => update({ wallpaper: { kind: 'gradient', id: g.id } })}
+                        className={swatch(frame.wallpaper.kind === 'gradient' && frame.wallpaper.id === g.id)}
+                        style={{ backgroundImage: gradientCss(g) }} />
+                ))}
+                <label title="Upload image" aria-label="Wallpaper: upload image"
+                    className={`${swatch(frame.wallpaper.kind === 'image')} cursor-pointer flex items-center justify-center text-[10px] text-zinc-300 bg-white/5 bg-cover bg-center`}
+                    style={frame.wallpaper.kind === 'image' ? { backgroundImage: `url(${frame.wallpaper.dataUrl})` } : undefined}>
+                    {frame.wallpaper.kind === 'image' ? '' : '+'}
+                    <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                </label>
+            </div>
+            {slider('Padding', 'padding', 0.25, 0.01)}
+            {slider('Corners', 'cornerRadius', 0.25, 0.01)}
+            {slider('Shadow', 'shadow', 1, 0.05)}
+            {frame.padding === 0 && frame.wallpaper.kind !== 'color' && (
+                <p className="text-[10px] text-zinc-500">Add padding to show the wallpaper around the recording.</p>
+            )}
+        </div>
+    );
+};
+
 const PropertyHUD: React.FC<PropertyHUDProps> = ({
     selection,
     selectedSubtitle,
@@ -34,6 +95,7 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
     currentBrushSize,
     projectName,
     canvasBackgroundColor,
+    backgroundFrame,
     aspectRatio,
     onUpdateSubtitle,
     onUpdateZoom,
@@ -132,6 +194,12 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                             <span className="text-xs font-mono text-zinc-300">{canvasBackgroundColor}</span>
                         </div>
                     </div>
+
+                    <BackgroundFrameControls
+                        frame={backgroundFrame || DEFAULT_BACKGROUND_FRAME}
+                        canvasBackgroundColor={canvasBackgroundColor || '#000000'}
+                        onChange={(next) => onUpdateProjectSettings({ backgroundFrame: next })}
+                    />
                 </div>
             </div>
         );

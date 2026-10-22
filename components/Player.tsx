@@ -6,6 +6,7 @@ import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useCanvasRecorder } from '../hooks/useCanvasRecorder';
 import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, calculateZoomRect } from '../utils/canvasRenderer';
 import PropertyHUD from './PropertyHUD';
+import { BackgroundFrame, isFrameActive, getFrameContentRect, drawWallpaper, drawFramedContent } from '../utils/backgroundFrame';
 
 type TimedItem = { start: number; end: number };
 
@@ -128,6 +129,7 @@ interface PlayerProps {
   
   aspectRatio: number;
   canvasBackgroundColor: string;
+  backgroundFrame?: BackgroundFrame;
   projectName: string | null;
   onUpdateProjectSettings: (updates: Partial<ExtendedEditorState>) => void;
   onMosaicBrushSizeChange: (size: number) => void;
@@ -181,6 +183,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   onPreviewLeave,
   aspectRatio,
   canvasBackgroundColor,
+  backgroundFrame,
   projectName,
   onUpdateProjectSettings,
   onMosaicBrushSizeChange
@@ -232,6 +235,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const isEditingCropRef = useRef(isEditingCrop);
   
   const canvasBackgroundColorRef = useRef(canvasBackgroundColor);
+  const backgroundFrameRef = useRef(backgroundFrame);
+  const frameContentCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
+  const wallpaperImageRef = useRef<HTMLImageElement | null>(null);
   const playbackRateRef = useRef(playbackRate);
   const isMutedRef = useRef(isMuted);
   const isAudioTrackMutedRef = useRef(isAudioTrackMuted);
@@ -271,6 +277,20 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useEffect(() => { activeClipIdRef.current = activeClipId; }, [activeClipId]);
   useEffect(() => { isEditingCropRef.current = isEditingCrop; }, [isEditingCrop]);
   useEffect(() => { canvasBackgroundColorRef.current = canvasBackgroundColor; }, [canvasBackgroundColor]);
+  useEffect(() => {
+      backgroundFrameRef.current = backgroundFrame;
+      const wp = backgroundFrame?.wallpaper;
+      if (wp?.kind === 'image') {
+          if (wallpaperImageRef.current?.src !== wp.dataUrl) {
+              const img = new Image();
+              img.onload = () => { if (!isPlayingRef.current && !isExportingRef.current) renderFrame('preview'); };
+              img.src = wp.dataUrl;
+              wallpaperImageRef.current = img;
+          }
+      } else {
+          wallpaperImageRef.current = null;
+      }
+  }, [backgroundFrame]);
   useEffect(() => { playbackRateRef.current = playbackRate; }, [playbackRate]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { isAudioTrackMutedRef.current = isAudioTrackMuted; }, [isAudioTrackMuted]);
@@ -844,13 +864,32 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
     const crop = activeClipCrop;
     const bgColor = canvasBackgroundColorRef.current || '#000000';
     const isEditingZoomState = !!(selectedZoom && zoom && selectedZoom.id === zoom.id && !playing);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const outerCtx = canvas.getContext('2d');
+    if (!outerCtx) return;
+
+    // Background frame (#24): render the recording into an offscreen content canvas, then composite
+    // it onto the wallpaper with padding / rounded corners / shadow. Skipped while editing a crop or
+    // zoom box in the preview so the on-canvas editing handles keep their coordinates.
+    const frameSettings = backgroundFrameRef.current;
+    const useFrame = isFrameActive(frameSettings) && !editingCrop && !isEditingZoomState;
+    const frameRect = useFrame ? getFrameContentRect(canvas.width, canvas.height, frameSettings!) : null;
+    let ctx = outerCtx;
+    if (frameRect) {
+        const fc = frameContentCanvasRef.current;
+        if (fc.width !== frameRect.width || fc.height !== frameRect.height) {
+            fc.width = frameRect.width;
+            fc.height = frameRect.height;
+        }
+        const fctx = fc.getContext('2d');
+        if (fctx) ctx = fctx;
+    }
+    const cw = ctx === outerCtx ? canvas.width : frameRect!.width;
+    const ch = ctx === outerCtx ? canvas.height : frameRect!.height;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, cw, ch);
     ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, cw, ch);
 
     const activeMediaType = frameState?.clip.mediaType;
     const isCapturingCover = !renderForExport && !coverImageRef.current && !autoCoverAttemptedRef.current && onAutoCover && activeMediaType === 'main';
@@ -859,10 +898,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
         if (currentSrc && currentSrc.startsWith('color:')) {
             const color = currentSrc.split('color:')[1];
             ctx.fillStyle = color;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillRect(0, 0, cw, ch);
             if (!isEditingZoomState && !editingCrop) {
-                if (mosaic) renderMosaic(ctx, null, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, null, playing, color);
-                if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime);
+                if (mosaic) renderMosaic(ctx, null, mosaic, pixelCanvasRef.current, maskCanvasRef.current, cw, ch, null, playing, color);
+                if (spotlight) renderSpotlight(ctx, spotlight, cw, ch, selectedSpotlight, playing, currentGlobalTime);
             }
         } else if (currentSrc && currentSrc.startsWith('image:')) {
             const realSrc = currentSrc.split('image:')[1];
@@ -876,25 +915,32 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
                 if (sourceDimensionsRef.current.width !== img.naturalWidth || sourceDimensionsRef.current.height !== img.naturalHeight) {
                     syncExportCanvasSize(img.naturalWidth, img.naturalHeight);
                 }
-                const cropInfo = renderVideoFrame(ctx, img, canvas.width, canvas.height, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
+                const cropInfo = renderVideoFrame(ctx, img, cw, ch, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
                 if (!isEditingZoomState && !editingCrop) {
-                    if (mosaic) renderMosaic(ctx, img, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, cropInfo, playing);
-                    if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime, cropInfo);
+                    if (mosaic) renderMosaic(ctx, img, mosaic, pixelCanvasRef.current, maskCanvasRef.current, cw, ch, cropInfo, playing);
+                    if (spotlight) renderSpotlight(ctx, spotlight, cw, ch, selectedSpotlight, playing, currentGlobalTime, cropInfo);
                 }
             }
         } else if (video && (video.readyState >= 2 || renderForExport)) {
             if (video.videoWidth > 0 && video.videoHeight > 0 && (sourceDimensionsRef.current.width !== video.videoWidth || sourceDimensionsRef.current.height !== video.videoHeight)) {
                 syncExportCanvasSize(video.videoWidth, video.videoHeight);
             }
-            const cropInfo = renderVideoFrame(ctx, video, canvas.width, canvas.height, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
+            const cropInfo = renderVideoFrame(ctx, video, cw, ch, zoom, crop, playing, selectedZoom, editingCrop, currentGlobalTime, activeClipTiming);
             if (!isEditingZoomState && !editingCrop) {
-                if (mosaic) renderMosaic(ctx, video, mosaic, pixelCanvasRef.current, maskCanvasRef.current, canvas.width, canvas.height, cropInfo, playing);
-                if (spotlight) renderSpotlight(ctx, spotlight, canvas.width, canvas.height, selectedSpotlight, playing, currentGlobalTime, cropInfo);
+                if (mosaic) renderMosaic(ctx, video, mosaic, pixelCanvasRef.current, maskCanvasRef.current, cw, ch, cropInfo, playing);
+                if (spotlight) renderSpotlight(ctx, spotlight, cw, ch, selectedSpotlight, playing, currentGlobalTime, cropInfo);
             }
         }
     }
 
-    renderSubtitles(ctx, subtitlesToRender, canvas.width, canvas.height, null, !renderForExport && playing);
+    renderSubtitles(ctx, subtitlesToRender, cw, ch, null, !renderForExport && playing);
+
+    if (frameRect && ctx !== outerCtx) {
+        outerCtx.setTransform(1, 0, 0, 1, 0, 0);
+        outerCtx.clearRect(0, 0, canvas.width, canvas.height);
+        drawWallpaper(outerCtx, canvas.width, canvas.height, frameSettings!, bgColor, wallpaperImageRef.current);
+        drawFramedContent(outerCtx, frameContentCanvasRef.current, frameRect, frameSettings!);
+    }
 
     if (isCapturingCover) {
         const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
@@ -979,6 +1025,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       activeClipId,
       activeClips,
       canvasBackgroundColor,
+      backgroundFrame,
       containerSize.width,
       containerSize.height
   ]);
@@ -1069,6 +1116,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
                 currentBrushSize={currentBrushSize}
                 projectName={projectName}
                 canvasBackgroundColor={canvasBackgroundColor}
+                backgroundFrame={backgroundFrame}
                 aspectRatio={aspectRatio}
                 onUpdateSubtitle={onUpdateSubtitle}
                 onUpdateZoom={onUpdateZoomEffect}

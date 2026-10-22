@@ -1,11 +1,12 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { DEFAULT_BACKGROUND_FRAME, normalizeBackgroundFrame } from '../utils/backgroundFrame';
 import { ExtendedEditorState, Clip, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect } from '../types';
 import { generateId } from '../utils';
 import { useHistory } from './useHistory';
 import { useClipOperations } from './useClipOperations';
 
-type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'duration' | 'clips' | 'audioClips' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'aspectRatio'>;
+type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'duration' | 'clips' | 'audioClips' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio'>;
 
 // 定义存储键名 (必须与 useProjectPersistence 保持一致)
 const STORAGE_KEY = 'framecut-project-v1';
@@ -26,6 +27,7 @@ const defaultState: ExtendedEditorState = {
     showDebug: false,
     canvasBackgroundColor: '#000000',
     aspectRatio: 16 / 9,
+    backgroundFrame: DEFAULT_BACKGROUND_FRAME,
     clips: [],
     audioClips: [],
     subtitles: [],
@@ -63,7 +65,8 @@ export const useEditor = () => {
                     ...defaultState, 
                     ...parsed,
                     aspectRatio: parsed.aspectRatio || defaultState.aspectRatio,
-                    canvasBackgroundColor: parsed.canvasBackgroundColor || defaultState.canvasBackgroundColor
+                    canvasBackgroundColor: parsed.canvasBackgroundColor || defaultState.canvasBackgroundColor,
+                    backgroundFrame: normalizeBackgroundFrame(parsed.backgroundFrame)
                 };
             }
         } catch (e) {
@@ -134,6 +137,7 @@ export const useEditor = () => {
         coverImage: fullState.coverImage,
         recordingEvents: fullState.recordingEvents,
         canvasBackgroundColor: fullState.canvasBackgroundColor,
+        backgroundFrame: fullState.backgroundFrame,
         aspectRatio: fullState.aspectRatio
     });
 
