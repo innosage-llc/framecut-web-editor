@@ -17,6 +17,7 @@ import { useAssetOperations } from './hooks/useAssetOperations';
 import { usePlaybackContext } from './hooks/usePlaybackContext';
 import { useExport } from './hooks/useExport';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
+import { VideoExportFormat, VideoExportSettings } from './utils/exportPresets';
 import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip } from './types';
 
 const App: React.FC = () => {
@@ -54,6 +55,32 @@ const App: React.FC = () => {
   } = useScreenRecorder({ onRecordingComplete: handleLoadProject });
   
   const { handleExportAction } = useExport({ state, setState, playerRef, currentTimeRef });
+
+  // Export settings dialog (aspect-ratio presets + MP4/WebM/GIF)
+  const [exportSettingsFormat, setExportSettingsFormat] = useState<VideoExportFormat | null>(null);
+  const [pendingExport, setPendingExport] = useState<VideoExportSettings | null>(null);
+
+  const handleConfirmExport = useCallback((settings: VideoExportSettings) => {
+    setExportSettingsFormat(null);
+    if (Math.abs(settings.aspectRatio - state.aspectRatio) > 0.001) {
+      handleUpdateProjectSettings({ aspectRatio: settings.aspectRatio });
+    }
+    setPendingExport(settings);
+  }, [state.aspectRatio, handleUpdateProjectSettings]);
+
+  // Start the export once the (possibly re-sized) canvas has been laid out and painted.
+  useEffect(() => {
+    if (!pendingExport) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const settings = pendingExport;
+        setPendingExport(null);
+        handleExportAction(false, settings.format, settings.gif);
+      });
+    });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  }, [pendingExport, handleExportAction]);
 
   // Persistence Hook
   const { lastSaved, isSaving, isResetting, saveProject, handleExportProject, handleImportProject, handleResetProject } = useProjectPersistence({ state, setState, recalculateDuration });
@@ -186,6 +213,7 @@ const App: React.FC = () => {
                 onSetCover={handleSetCoverImage} 
                 onExport={handleExportAction}
                 onExportProject={handleExportProject}
+                onOpenExportSettings={(format) => setExportSettingsFormat(format ?? 'mp4')}
                 onImportProject={handleImportProject}
                 onResetProject={handleResetProject}
                 onManualSave={saveProject}
@@ -351,7 +379,15 @@ const App: React.FC = () => {
             <h2 className="text-xl font-bold text-white tracking-wide">Cleaning Project Data...</h2>
         </div>
       )}
-      <ExportModal isExporting={state.isExporting} progress={state.exportProgress} />
+      <ExportModal
+        isExporting={state.isExporting}
+        progress={state.exportProgress}
+        showSettings={exportSettingsFormat !== null}
+        initialFormat={exportSettingsFormat ?? 'mp4'}
+        aspectRatio={state.aspectRatio}
+        onCloseSettings={() => setExportSettingsFormat(null)}
+        onConfirmExport={handleConfirmExport}
+      />
     </div>
   );
 };

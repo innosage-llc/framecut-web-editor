@@ -1,6 +1,8 @@
 import React, { useCallback, RefObject } from 'react';
 import { Clip, ExtendedEditorState, PlayerRef } from '../types';
 import { renderProjectAudio, audioBufferToWav } from '../utils/audioRenderer';
+import { GifEncoder, getGifSize } from '../utils/gifEncoder';
+import { DEFAULT_GIF_OPTIONS, GifOptions } from '../utils/exportPresets';
 
 interface UseExportProps {
     state: ExtendedEditorState;
@@ -47,7 +49,71 @@ const findActiveClipAtTime = (clips: Clip[], time: number, cursor: { index: numb
 };
 
 export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExportProps) => {
-    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a') => {
+    /** Render every frame offline, downscale it and encode it as an animated GIF (no audio). */
+    const exportGif = useCallback(async (opts: GifOptions) => {
+        const player = playerRef.current;
+        if (!player) return;
+        const canvas = player.getCanvas();
+        if (!canvas) throw new Error('No canvas found');
+
+        const { width, height } = getGifSize(canvas.width, canvas.height, opts.maxWidth);
+        const frameCanvas = document.createElement('canvas');
+        frameCanvas.width = width;
+        frameCanvas.height = height;
+        const ctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) throw new Error('Could not create GIF frame canvas');
+
+        const encoder = new GifEncoder({ width, height, fps: opts.fps, loop: opts.loop });
+        const fps = opts.fps;
+        const totalFrames = Math.max(1, Math.ceil(state.duration * fps));
+        const sortedClips = [...state.clips].sort((a, b) => a.offset - b.offset);
+        const clipCursor = { index: 0 };
+        let activeClipId: string | null = null;
+        let activeClipMode: 'video' | 'static' | 'empty' = 'empty';
+        let lastUiUpdate = performance.now();
+
+        for (let i = 0; i < totalFrames; i++) {
+            const time = i / fps;
+            const activeClip = findActiveClipAtTime(sortedClips, time, clipCursor);
+            if (i === 0 || activeClip?.id !== activeClipId) {
+                activeClipMode = await player.prepareExportPlayback(activeClip);
+                activeClipId = activeClip?.id ?? null;
+            }
+            currentTimeRef.current = time;
+            if (activeClip && activeClipMode === 'video') {
+                await player.syncExportPlayback(activeClip.sourceStart + ((time - activeClip.offset) * activeClip.speed));
+            } else {
+                await player.seekTo(time);
+            }
+            player.renderFrame();
+
+            ctx.fillStyle = state.canvasBackgroundColor || '#000000';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(canvas, 0, 0, width, height);
+            encoder.addFrame(ctx.getImageData(0, 0, width, height).data);
+
+            if (i === totalFrames - 1 || performance.now() - lastUiUpdate >= 150) {
+                lastUiUpdate = performance.now();
+                const progress = Math.floor(((i + 1) / totalFrames) * 95);
+                setState(prev => ({ ...prev, currentTime: time, exportProgress: progress }));
+                // Yield so the progress UI can paint during long encodes.
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+        }
+
+        downloadBlob(encoder.finish(), sanitizeBaseName(state.fileName), 'gif');
+        setState(prev => ({
+            ...prev,
+            isExporting: false,
+            isExportingAudio: false,
+            currentTime: 0,
+            exportProgress: 100,
+            showSuccessToast: true
+        }));
+        setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false })), 3000);
+    }, [state, setState, currentTimeRef, playerRef]);
+
+    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a' | 'gif', gifOptions: GifOptions = DEFAULT_GIF_OPTIONS) => {
         if (state.clips.length === 0 && state.audioClips.length === 0) return;
         if (!playerRef.current) return;
 
@@ -65,6 +131,11 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         }));
 
         try {
+            if (!audioOnly && format === 'gif') {
+                await exportGif(gifOptions);
+                return;
+            }
+
             const audioBuffer = await renderProjectAudio(state);
 
             if (audioOnly) {
@@ -171,7 +242,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             playerRef.current?.stopExportPlayback();
             recorder?.releaseExportCanvas?.();
         }
-    }, [state, setState, currentTimeRef, playerRef]);
+    }, [state, setState, currentTimeRef, playerRef, exportGif]);
 
     return {
         handleExportAction
