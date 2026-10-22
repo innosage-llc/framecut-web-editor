@@ -3,6 +3,7 @@ import React, { Dispatch, SetStateAction, useCallback } from 'react';
 import { MediaAsset, Clip, SpotlightEffect, ExtendedEditorState, RecordingEvent } from '../types';
 import { generateId, getVideoDuration, extractWaveform } from '../utils';
 import { storeAssetInDB, deleteAssetFromDB, getAssetFromDB } from '../utils/db';
+import { generateAutoZooms, mergeAutoZooms } from '../utils/autoZoom';
 import { analyzeAudioSilence, analyzeMousePatterns, generateSimulatedEffects } from '../utils/analysis';
 
 interface UseAssetOperationsProps {
@@ -537,9 +538,35 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
         });
     };
 
+    /**
+     * Auto Zoom (#22): on demand, build cursor-following zoom regions from the recorded
+     * click/move events. Replaces earlier untouched auto regions, keeps manual/edited ones.
+     * Undoable via the normal history stack. Returns the number of regions added.
+     */
+    const handleAutoZoom = useCallback((recordingEvents: RecordingEvent[]) => {
+        if (!recordingEvents || !recordingEvents.some(e => e.type === 'click')) {
+            alert('Auto Zoom needs a screen recording with clicks recorded inside this tab.');
+            return;
+        }
+        pushHistory();
+        setState(prev => {
+            const generated = generateAutoZooms(recordingEvents, prev.clips, prev.duration);
+            const zoomEffects = mergeAutoZooms(prev.zoomEffects, generated);
+            return {
+                ...prev,
+                zoomEffects,
+                duration: recalculateDuration(prev.clips, prev.audioClips, prev.subtitles, zoomEffects, prev.spotlightEffects, prev.mosaicEffects),
+                toastMessage: `Auto Zoom: ${zoomEffects.filter(z => z.auto).length} zoom region(s)`,
+                showSuccessToast: true
+            };
+        });
+        setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
+    }, [setState, pushHistory, recalculateDuration]);
+
     return {
         handleLoadProject,
         handleMagicPolish,
+        handleAutoZoom,
         handleUrlImport,
         handleUploadAsset,
         handleSetColorAsset,

@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect } from 'react';
-import { Play, Pause, Scissors, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileAudio, Camera, Activity, Crop, Sparkles, Loader2 } from 'lucide-react';
+import { Play, Pause, Scissors, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileAudio, Camera, Activity, Crop, Sparkles, Loader2, MousePointerClick } from 'lucide-react';
 import { Selection, Subtitle } from '../types';
 import { formatTimecode } from '../utils';
 
@@ -15,6 +15,8 @@ interface ToolbarProps {
   onSplit: () => void; 
   onCrop: () => void;
   onMagicPolish: () => void;
+  onAutoZoom?: () => void;
+  hasRecordingEvents?: boolean;
   onDelete: () => void;
   onDetachAudio: () => void;
   onToggleDebug: () => void;
@@ -42,7 +44,7 @@ const TimecodeDisplay: React.FC<{ refSource: React.MutableRefObject<number>, isP
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
   isPlaying, selection, hasVideo, isPolishing, onPlayPause, onStepFrame, onZoom, 
-  onSplit, onCrop, onMagicPolish, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
+  onSplit, onCrop, onMagicPolish, onAutoZoom, hasRecordingEvents, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
 }) => {
   const isCropActive = selection?.type === 'crop';
 
@@ -68,6 +70,19 @@ const Toolbar: React.FC<ToolbarProps> = ({
         >
             {isPolishing ? <Loader2 size={16} className="animate-spin text-purple-500" /> : <Sparkles size={16} />}
         </button>
+
+        {/* Auto Zoom (cursor-following) */}
+        {onAutoZoom && (
+            <button
+                onClick={onAutoZoom}
+                className="p-1.5 hover:bg-emerald-900/30 rounded-md text-zinc-400 hover:text-emerald-400 disabled:opacity-30 transition-colors"
+                disabled={!hasVideo || !hasRecordingEvents}
+                title={hasRecordingEvents ? "Auto Zoom (follow cursor from recorded clicks; run again to regenerate)" : "Auto Zoom needs a screen recording with clicks"}
+                aria-label="Auto Zoom"
+            >
+                <MousePointerClick size={16} />
+            </button>
+        )}
 
         <button onClick={onDelete} className="p-1.5 hover:bg-zinc-800 rounded-md text-zinc-400 hover:text-red-400 disabled:opacity-30" disabled={!hasVideo || !selection} title="Delete"><Trash2 size={16} /></button>
         <div className="w-px h-4 bg-zinc-700 mx-2" />

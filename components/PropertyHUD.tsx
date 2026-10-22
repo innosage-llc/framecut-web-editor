@@ -316,6 +316,17 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                             className="w-full h-1 bg-zinc-600 rounded-lg appearance-none cursor-pointer accent-emerald-500 transform rotate-180"
                         />
                     </div>
+                    <label className={`flex items-center gap-2 text-xs ${selectedZoom.cursorPath?.length ? 'text-zinc-300' : 'text-zinc-600'}`}
+                        title={selectedZoom.cursorPath?.length ? 'Pan the zoom with the recorded cursor' : 'Only available for Auto Zoom regions with a recorded cursor path'}>
+                        <input
+                            type="checkbox"
+                            aria-label="Follow cursor"
+                            disabled={!selectedZoom.cursorPath?.length}
+                            checked={!!selectedZoom.followCursor && !!selectedZoom.cursorPath?.length}
+                            onChange={(e) => handleZoomUpdate({ followCursor: e.target.checked })}
+                        />
+                        Follow cursor
+                    </label>
                 </div>
             )}
 

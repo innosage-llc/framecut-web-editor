@@ -1,4 +1,5 @@
 
+import { getFollowCursorCenter, clampBoxOrigin } from './autoZoom';
 import { Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, MosaicPath } from '../types';
 
 // Easing functions for smooth animation
@@ -20,6 +21,12 @@ export const calculateZoomRect = (zoom: ZoomEffect, currentTime: number) => {
     }
 
     const localTime = currentTime - zoom.start;
+
+    // Follow-cursor regions pan the (fixed-size) box with the smoothed cursor position.
+    const follow = getFollowCursorCenter(zoom, currentTime);
+    if (follow) {
+        zoom = { ...zoom, x: clampBoxOrigin(follow.x, zoom.width), y: clampBoxOrigin(follow.y, zoom.height) };
+    }
 
     // 1. Entry Phase (Zoom In)
     if (localTime < transitionDuration) {

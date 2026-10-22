@@ -61,6 +61,18 @@ export interface ZoomEffect {
   y: number;
   width: number;
   height: number;
+  /** Created by Auto Zoom (#22); re-running Auto Zoom replaces only these. Cleared when the user edits the region. */
+  auto?: boolean;
+  /** Pan the zoom box with the recorded cursor while zoomed. */
+  followCursor?: boolean;
+  /** Recorded cursor positions inside this region, in timeline seconds and 0-100 %. */
+  cursorPath?: CursorPoint[];
+}
+
+export interface CursorPoint {
+  time: number;
+  x: number;
+  y: number;
 }
 
 export interface SpotlightEffect {

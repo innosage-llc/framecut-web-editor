@@ -193,7 +193,13 @@ export const useClipOperations = ({ setState, pushHistory, recalculateDuration }
 
     const handleUpdateZoomEffect = useCallback((updatedZoom: ZoomEffect) => {
         setState(prev => {
-            const newZooms = prev.zoomEffects.map(z => z.id === updatedZoom.id ? updatedZoom : z);
+            // A user edit "claims" an auto-generated region so re-running Auto Zoom keeps it.
+            const newZooms = prev.zoomEffects.map(z => {
+                if (z.id !== updatedZoom.id) return z;
+                const edited = z.auto && (['start', 'end', 'x', 'y', 'width', 'height', 'followCursor'] as const)
+                    .some(k => z[k] !== updatedZoom[k]);
+                return edited ? { ...updatedZoom, auto: false } : updatedZoom;
+            });
             return {
                 ...prev,
                 zoomEffects: newZooms,
