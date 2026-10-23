@@ -385,6 +385,8 @@ const App: React.FC = () => {
         showSettings={exportSettingsFormat !== null}
         initialFormat={exportSettingsFormat ?? 'mp4'}
         aspectRatio={state.aspectRatio}
+        projectDuration={state.duration}
+        canvasSize={(() => { const c = playerRef.current?.getCanvas(); return c ? { width: c.width, height: c.height } : { width: 1920, height: 1080 }; })()}
         onCloseSettings={() => setExportSettingsFormat(null)}
         onConfirmExport={handleConfirmExport}
       />

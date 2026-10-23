@@ -1,13 +1,18 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import {
     ASPECT_PRESETS,
     DEFAULT_GIF_OPTIONS,
     GIF_FPS_OPTIONS,
-    GIF_WIDTH_OPTIONS,
+    GIF_MAX_DURATION_S,
+    GIF_MAX_FILE_BYTES,
+    GIF_MAX_LONGEST_SIDE,
+    GIF_SIZE_OPTIONS,
     VideoExportFormat,
     VideoExportSettings,
+    evaluateGifLimits,
+    formatBytes,
 } from '../utils/exportPresets';
 
 interface ExportModalProps {
@@ -17,6 +22,10 @@ interface ExportModalProps {
     showSettings?: boolean;
     /** Current project aspect ratio; used as the initial preset. */
     aspectRatio?: number;
+    /** Timeline duration in seconds — used for GIF length warnings. */
+    projectDuration?: number;
+    /** Current canvas size — used for GIF resolution warnings. */
+    canvasSize?: { width: number; height: number };
     initialFormat?: VideoExportFormat;
     onCloseSettings?: () => void;
     onConfirmExport?: (settings: VideoExportSettings) => void;
@@ -32,8 +41,15 @@ const optionClass = (active: boolean) => `px-2 py-2 rounded text-xs border trans
     active ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white/5 border-transparent text-zinc-300 hover:bg-white/10'
 }`;
 
-const ExportSettings: React.FC<Required<Pick<ExportModalProps, 'onCloseSettings' | 'onConfirmExport'>> & { aspectRatio: number; initialFormat: VideoExportFormat }> = ({
-    aspectRatio, initialFormat, onCloseSettings, onConfirmExport
+const ExportSettings: React.FC<{
+    aspectRatio: number;
+    initialFormat: VideoExportFormat;
+    projectDuration: number;
+    canvasSize: { width: number; height: number };
+    onCloseSettings: () => void;
+    onConfirmExport: (settings: VideoExportSettings) => void;
+}> = ({
+    aspectRatio, initialFormat, projectDuration, canvasSize, onCloseSettings, onConfirmExport
 }) => {
     const [format, setFormat] = useState<VideoExportFormat>(initialFormat);
     const [ratio, setRatio] = useState<number>(aspectRatio);
@@ -41,6 +57,13 @@ const ExportSettings: React.FC<Required<Pick<ExportModalProps, 'onCloseSettings'
 
     useEffect(() => { setRatio(aspectRatio); }, [aspectRatio]);
     useEffect(() => { setFormat(initialFormat); }, [initialFormat]);
+
+    const limits = useMemo(
+        () => evaluateGifLimits(projectDuration, canvasSize.width || 1920, canvasSize.height || 1080, gif),
+        [projectDuration, canvasSize.width, canvasSize.height, gif]
+    );
+
+    const canExportGif = format !== 'gif' || limits.effectiveDuration <= GIF_MAX_DURATION_S;
 
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80] flex items-center justify-center" onClick={onCloseSettings}>
@@ -90,9 +113,9 @@ const ExportSettings: React.FC<Required<Pick<ExportModalProps, 'onCloseSettings'
                                 </select>
                             </label>
                             <label className="text-xs text-zinc-300 space-y-1">
-                                <span className="block text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Max width</span>
-                                <select aria-label="GIF max width" value={gif.maxWidth} onChange={e => setGif({ ...gif, maxWidth: Number(e.target.value) })} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5">
-                                    {GIF_WIDTH_OPTIONS.map(v => <option key={v} value={v}>{v} px</option>)}
+                                <span className="block text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Max longest side</span>
+                                <select aria-label="GIF max longest side" value={gif.maxLongestSide} onChange={e => setGif({ ...gif, maxLongestSide: Number(e.target.value) })} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5">
+                                    {GIF_SIZE_OPTIONS.map(v => <option key={v} value={v}>{v} px{v === GIF_MAX_LONGEST_SIDE ? ' (max)' : ''}</option>)}
                                 </select>
                             </label>
                         </div>
@@ -100,13 +123,53 @@ const ExportSettings: React.FC<Required<Pick<ExportModalProps, 'onCloseSettings'
                             <input type="checkbox" aria-label="Loop GIF" checked={gif.loop} onChange={e => setGif({ ...gif, loop: e.target.checked })} />
                             Loop forever
                         </label>
-                        <p className="text-[10px] text-zinc-500">GIFs are encoded in your browser with a 252-colour palette and no audio. Long clips produce large files.</p>
+
+                        {(limits.needsTrim || limits.needsDownscale) && (
+                            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2" data-testid="gif-limit-warnings" role="alert">
+                                <div className="text-xs font-semibold text-amber-200">This clip exceeds GIF limits</div>
+                                {limits.needsTrim && (
+                                    <div className="space-y-1">
+                                        <p className="text-[11px] text-amber-100/90">
+                                            Length {limits.sourceDuration.toFixed(1)}s exceeds the {GIF_MAX_DURATION_S}s maximum.
+                                        </p>
+                                        <label className="flex items-center gap-2 text-xs text-zinc-200">
+                                            <input
+                                                type="checkbox"
+                                                aria-label={`Trim GIF to ${GIF_MAX_DURATION_S} seconds`}
+                                                checked={gif.trimToMaxDuration}
+                                                onChange={e => setGif({ ...gif, trimToMaxDuration: e.target.checked })}
+                                            />
+                                            Trim to first {GIF_MAX_DURATION_S}s
+                                        </label>
+                                    </div>
+                                )}
+                                {limits.needsDownscale && (
+                                    <p className="text-[11px] text-amber-100/90">
+                                        Source longest side is {limits.sourceLongestSide}px. Export will downscale to {limits.effectiveLongestSide}px (cap {GIF_MAX_LONGEST_SIDE}px).
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
+                        <p className="text-[10px] text-zinc-500">
+                            Encoded in your browser with gif.js. Limits: {GIF_MAX_DURATION_S}s, longest side ≤ {GIF_MAX_LONGEST_SIDE}px, file ≤ {formatBytes(GIF_MAX_FILE_BYTES)}. No audio.
+                        </p>
+                        {!canExportGif && (
+                            <p className="text-[11px] text-red-400" data-testid="gif-trim-required">
+                                Enable “Trim to {GIF_MAX_DURATION_S}s” to continue, or shorten the project.
+                            </p>
+                        )}
                     </div>
                 )}
 
                 <div className="flex justify-end gap-2">
                     <button onClick={onCloseSettings} className="px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
-                    <button data-testid="export-confirm" onClick={() => onConfirmExport({ format, aspectRatio: ratio, gif })} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium">
+                    <button
+                        data-testid="export-confirm"
+                        disabled={format === 'gif' && !canExportGif}
+                        onClick={() => onConfirmExport({ format, aspectRatio: ratio, gif })}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
                         Export {format.toUpperCase()}
                     </button>
                 </div>
@@ -116,10 +179,27 @@ const ExportSettings: React.FC<Required<Pick<ExportModalProps, 'onCloseSettings'
 };
 
 const ExportModal: React.FC<ExportModalProps> = ({
-    isExporting, progress, showSettings = false, aspectRatio = 16 / 9, initialFormat = 'mp4', onCloseSettings, onConfirmExport
+    isExporting,
+    progress,
+    showSettings = false,
+    aspectRatio = 16 / 9,
+    projectDuration = 0,
+    canvasSize = { width: 1920, height: 1080 },
+    initialFormat = 'mp4',
+    onCloseSettings,
+    onConfirmExport,
 }) => {
     if (!isExporting && showSettings && onCloseSettings && onConfirmExport) {
-        return <ExportSettings aspectRatio={aspectRatio} initialFormat={initialFormat} onCloseSettings={onCloseSettings} onConfirmExport={onConfirmExport} />;
+        return (
+            <ExportSettings
+                aspectRatio={aspectRatio}
+                initialFormat={initialFormat}
+                projectDuration={projectDuration}
+                canvasSize={canvasSize}
+                onCloseSettings={onCloseSettings}
+                onConfirmExport={onConfirmExport}
+            />
+        );
     }
 
     if (!isExporting && (progress === 0 || progress === 100)) return null;
