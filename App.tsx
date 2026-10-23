@@ -151,6 +151,7 @@ const App: React.FC = () => {
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
       seek: (t: number) => handleSeek(t),
+      setBackgroundFrame: (patch: any) => handleUpdateProjectSettings({ backgroundFrame: { ...stateRef.current.backgroundFrame, ...patch } } as any),
       /** Render one export-mode frame and sample RGBA at [x%, y%] points of the export canvas. */
       sampleExportFrame: async (t: number, points: [number, number][], width = 640, height = 360) => {
         const p = playerRef.current;
@@ -163,7 +164,7 @@ const App: React.FC = () => {
       },
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, handleSeek, state.backgroundFrame, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, handleSeek, handleUpdateProjectSettings, state.backgroundFrame, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);

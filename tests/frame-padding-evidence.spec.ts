@@ -56,7 +56,8 @@ async function exportContentPixels(page: Page, t: number, contentPts: [number, n
   return page.evaluate(async ([t, contentPts, W, H]: any) => {
     const m = await import('/utils/backgroundFrame.ts');
     const e2e = (window as any).__FRAMECUT_E2E__;
-    const r = m.getFrameContentRect(W, H, e2e.getSnapshot().backgroundFrame);
+    const f = e2e.getSnapshot().backgroundFrame;
+    const r = m.isFrameActive(f) ? m.getFrameContentRect(W, H, f) : { x: 0, y: 0, width: W, height: H };
     const pts = contentPts.map(([x, y]: number[]) => [((r.x + x / 100 * r.width) / W) * 100, ((r.y + y / 100 * r.height) / H) * 100]);
     return (await e2e.sampleExportFrame(t, pts, W, H)).pixels as number[][];
   }, [t, contentPts, W, H]);
@@ -162,4 +163,41 @@ test.describe('#26 P1 evidence with a visible test video', () => {
     const inner = await exportContentPixels(page, 1, [[0.5, 0.5]]);
     expect(diff(corner.pixels[0], inner[0])).toBeGreaterThan(10);
   });
+
+  for (const c of [
+    { name: 'frame ON, padding 0.25 (UI max)', patch: { enabled: true, padding: 0.25 } },
+    { name: 'frame ON, padding 0.40 requested (clamped to 0.25 by getFrameContentRect)', patch: { enabled: true, padding: 0.4 } },
+    { name: 'frame OFF', patch: { enabled: false } },
+  ]) {
+    test(`brush blur stroke lands under the pointer — ${c.name}`, async ({ page }) => {
+      await page.evaluate((p) => (window as any).__FRAMECUT_E2E__.setBackgroundFrame(p), c.patch);
+      await expect.poll(async () => JSON.stringify((await E2E(page)).backgroundFrame)).toContain(JSON.stringify(c.patch).slice(1, -1).split(',')[0]);
+      const exp = await expectedRect(page);
+      expect(exp.active).toBe(c.patch.enabled);
+      await page.getByTitle('Add Blur Effect').click();
+      await page.getByRole('button', { name: 'Brush' }).click();
+      await expect.poll(async () => (await E2E(page)).mosaicEffects[0]?.mode).toBe('path');
+      const l = await layerBox(page);
+      if (c.patch.enabled) {
+        for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(l[k] - exp[k])).toBeLessThan(2);
+      } else {
+        const content = (await page.locator('canvas.w-full').boundingBox())!;
+        for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(l[k] - content[k])).toBeLessThan(2);
+      }
+      const PTS: [number, number][] = [[60, 35], [10, 85]];
+      const [midBefore, farBefore] = await exportContentPixels(page, 1, PTS);
+      const y = l.y + l.height * 0.35, x0 = l.x + l.width * 0.5, x1 = l.x + l.width * 0.7;
+      await page.mouse.move(x0, y); await page.mouse.down();
+      for (let i = 1; i <= 10; i++) await page.mouse.move(x0 + (x1 - x0) * i / 10, y);
+      await page.mouse.up();
+      const pts = (await E2E(page)).mosaicEffects[0].paths.flatMap((p: any) => p.points);
+      expect(pts.length).toBeGreaterThan(3);
+      expect(Math.abs(pts[0].x - 50)).toBeLessThan(1.5);
+      expect(Math.abs(pts[pts.length - 1].x - 70)).toBeLessThan(1.5);
+      for (const p of pts) expect(Math.abs(p.y - 35)).toBeLessThan(1.5);
+      const [midAfter, farAfter] = await exportContentPixels(page, 1, PTS);
+      expect(diff(midBefore, midAfter)).toBeGreaterThan(20);
+      expect(diff(farBefore, farAfter)).toBeLessThan(20);
+    });
+  }
 });
