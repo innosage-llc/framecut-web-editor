@@ -158,6 +158,11 @@ export interface EditorState {
   // Recording Data (Persisted for Magic Edit)
   recordingEvents: RecordingEvent[];
 
+  /** Global Auto Zoom master switch (#22). On by default; generates after record/import when click metadata exists. */
+  autoZoomEnabled: boolean;
+  /** 0–1 sensitivity for grouping nearby clicks when auto-generating zooms. */
+  autoZoomSensitivity: number;
+
   // Export Settings
   coverImage: string | null; // Base64 or Blob URL for the video thumbnail/poster
 }

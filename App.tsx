@@ -35,7 +35,7 @@ const App: React.FC = () => {
   // Track mouse hover over the preview player to target Zoom effects
   const previewHoverRef = useRef<{x: number, y: number} | null>(null);
 
-  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef });
+  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef });
   const { videoCtx, audioCtx } = usePlaybackContext({ state });
   const { 
       isScreenRecording, 
@@ -302,6 +302,11 @@ const App: React.FC = () => {
           onCrop={handleCrop}
           onMagicPolish={() => handleMagicPolish(state.mainVideo, state.recordingEvents)}
           onAutoZoom={() => handleAutoZoom(state.recordingEvents)}
+          onRemoveAutoZooms={handleRemoveAutoZooms}
+          autoZoomEnabled={state.autoZoomEnabled !== false}
+          onToggleAutoZoom={handleSetAutoZoomEnabled}
+          autoZoomSensitivity={state.autoZoomSensitivity ?? 0.5}
+          onAutoZoomSensitivity={handleSetAutoZoomSensitivity}
           hasRecordingEvents={state.recordingEvents.some(e => e.type === 'click')}
           onDelete={handleDelete}
           onDetachAudio={handleDetachAudio}
