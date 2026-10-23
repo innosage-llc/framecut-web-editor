@@ -11,7 +11,7 @@ interface PropertyHUDProps {
     selectedSpotlight?: SpotlightEffect;
     selectedMosaic?: MosaicEffect;
     currentBrushSize?: number;
-    
+
     // Project Settings
     projectName?: string | null;
     canvasBackgroundColor?: string;
@@ -153,7 +153,7 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
     if (!selection) {
         if (!showSettings) {
             return (
-                <button 
+                <button
                     onClick={() => setShowSettings(true)}
                     className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-black/80 text-white rounded-full backdrop-blur-md border border-white/10 shadow-lg transition-all hover:scale-110 z-50 group"
                     title="Project Settings"
@@ -287,7 +287,7 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
     // Render Item Properties (Also positioned to the right to keep video clean)
     return (
         <div className="absolute top-0 left-full ml-4 w-64 bg-black/80 backdrop-blur-md border border-zinc-700/50 rounded-2xl shadow-2xl p-4 text-white z-50 animate-in fade-in slide-in-from-left-4 duration-200">
-            <button 
+            <button
                 onClick={onDeselect}
                 className="absolute top-2 right-2 p-1 text-zinc-500 hover:text-white transition-colors rounded-full hover:bg-white/10"
             >
@@ -299,7 +299,7 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                     <div className="flex items-center gap-2 text-sm font-semibold text-purple-400 pb-2 border-b border-white/10">
                         <Type size={16} /> Text
                     </div>
-                    
+
                     {/* Style Presets */}
                     <div>
                         <div className="text-[10px] text-zinc-400 mb-1">Quick Styles</div>
@@ -367,7 +367,7 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                             </div>
                         </div>
                     </div>
-                    
+
                     <div className="flex gap-2">
                         <button
                             onClick={() => handleSubtitleUpdate({ fontWeight: selectedSubtitle.fontWeight === 'bold' ? 'normal' : 'bold' })}
@@ -397,9 +397,9 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                         </div>
                         <input
                             type="range"
-                            min="20" max="100" step="1"
-                            // Reverse logic: Smaller width = Larger scale
-                            value={selectedZoom.width} 
+                            min="33" max="100" step="1"
+                            // Reverse logic: Smaller width = Larger scale. Range ~1–3× per #22.
+                            value={Math.min(100, Math.max(33, selectedZoom.width))}
                             onChange={(e) => {
                                 const w = parseInt(e.target.value);
                                 // Maintain aspect ratio of the zoom box (assuming square for simplicity or keep ratio)
@@ -409,6 +409,22 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                             className="w-full h-1 bg-zinc-600 rounded-lg appearance-none cursor-pointer accent-emerald-500 transform rotate-180"
                         />
                     </div>
+                    <label className={`flex items-center gap-2 text-xs ${selectedZoom.cursorPath?.length ? 'text-zinc-300' : 'text-zinc-600'}`}
+                        title={selectedZoom.cursorPath?.length
+                            ? 'Auto: pan with the in-tab recorded cursor. Off = Manual fixed region.'
+                            : 'Auto (follow cursor) needs a recorded in-tab cursor path from Auto Zoom'}>
+                        <input
+                            type="checkbox"
+                            aria-label="Follow cursor (Auto vs Manual)"
+                            disabled={!selectedZoom.cursorPath?.length}
+                            checked={!!selectedZoom.followCursor && !!selectedZoom.cursorPath?.length}
+                            onChange={(e) => handleZoomUpdate({ followCursor: e.target.checked })}
+                        />
+                        Follow cursor (Auto)
+                    </label>
+                    <p className="text-[9px] text-zinc-600 leading-snug">
+                        Zooms follow clicks/cursor inside this browser tab only.
+                    </p>
                 </div>
             )}
 
@@ -457,7 +473,7 @@ const PropertyHUD: React.FC<PropertyHUDProps> = ({
                     <div className="flex items-center gap-2 text-sm font-semibold text-pink-400 pb-2 border-b border-white/10">
                         <Grid3X3 size={16} /> Blur
                     </div>
-                    
+
                     {/* Mode Toggle */}
                     <div>
                         <div className="flex justify-between text-[10px] text-zinc-400 mb-1">

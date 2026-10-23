@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect } from 'react';
-import { Play, Pause, Scissors, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileAudio, Camera, Activity, Crop, Sparkles, Loader2 } from 'lucide-react';
+import { Play, Pause, Scissors, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileAudio, Camera, Activity, Crop, Sparkles, Loader2, MousePointerClick, RotateCcw, X } from 'lucide-react';
 import { Selection, Subtitle } from '../types';
 import { formatTimecode } from '../utils';
 
@@ -15,6 +15,15 @@ interface ToolbarProps {
   onSplit: () => void; 
   onCrop: () => void;
   onMagicPolish: () => void;
+  /** Regenerate / repair auto zooms from in-tab click metadata. */
+  onAutoZoom?: () => void;
+  /** Remove auto-generated zoom regions only. */
+  onRemoveAutoZooms?: () => void;
+  autoZoomEnabled?: boolean;
+  onToggleAutoZoom?: (enabled: boolean) => void;
+  autoZoomSensitivity?: number;
+  onAutoZoomSensitivity?: (value: number) => void;
+  hasRecordingEvents?: boolean;
   onDelete: () => void;
   onDetachAudio: () => void;
   onToggleDebug: () => void;
@@ -42,7 +51,9 @@ const TimecodeDisplay: React.FC<{ refSource: React.MutableRefObject<number>, isP
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
   isPlaying, selection, hasVideo, isPolishing, onPlayPause, onStepFrame, onZoom, 
-  onSplit, onCrop, onMagicPolish, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
+  onSplit, onCrop, onMagicPolish, onAutoZoom, onRemoveAutoZooms,
+  autoZoomEnabled = true, onToggleAutoZoom, autoZoomSensitivity = 0.5, onAutoZoomSensitivity,
+  hasRecordingEvents, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
 }) => {
   const isCropActive = selection?.type === 'crop';
 
@@ -68,6 +79,63 @@ const Toolbar: React.FC<ToolbarProps> = ({
         >
             {isPolishing ? <Loader2 size={16} className="animate-spin text-purple-500" /> : <Sparkles size={16} />}
         </button>
+
+        {/* Auto Zoom: global toggle (default on) + regenerate / remove */}
+        {onAutoZoom && (
+            <div className="flex items-center gap-0.5 pl-1 border-l border-zinc-800 ml-0.5"
+                 title="Auto Zoom follows clicks/cursor captured inside this browser tab only. Imported MP4s without click metadata will not auto-zoom.">
+                <button
+                    onClick={() => onToggleAutoZoom?.(!autoZoomEnabled)}
+                    className={`p-1.5 rounded-md disabled:opacity-30 transition-colors ${autoZoomEnabled ? 'bg-emerald-900/40 text-emerald-400' : 'hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400'}`}
+                    disabled={!hasVideo}
+                    title={autoZoomEnabled
+                        ? "Auto Zoom ON (default). Zooms follow in-tab clicks/cursor. Click to turn off."
+                        : "Auto Zoom OFF. Click to enable (still needs in-tab click metadata)."}
+                    aria-label="Toggle Auto Zoom"
+                    aria-pressed={autoZoomEnabled}
+                >
+                    <MousePointerClick size={16} />
+                </button>
+                <button
+                    onClick={onAutoZoom}
+                    className="p-1.5 hover:bg-emerald-900/30 rounded-md text-zinc-400 hover:text-emerald-400 disabled:opacity-30 transition-colors"
+                    disabled={!hasVideo || !hasRecordingEvents}
+                    title={hasRecordingEvents
+                        ? "Generate / regenerate Auto Zoom from in-tab clicks (keeps edited regions)"
+                        : "Generate needs a screen recording with clicks inside this tab"}
+                    aria-label="Generate Auto Zoom"
+                >
+                    <RotateCcw size={14} />
+                </button>
+                {onRemoveAutoZooms && (
+                    <button
+                        onClick={onRemoveAutoZooms}
+                        className="p-1.5 hover:bg-zinc-800 rounded-md text-zinc-500 hover:text-red-400 disabled:opacity-30 transition-colors"
+                        disabled={!hasVideo}
+                        title="Remove auto-generated zoom regions (edited/manual segments stay)"
+                        aria-label="Remove Auto Zooms"
+                    >
+                        <X size={14} />
+                    </button>
+                )}
+                {onAutoZoomSensitivity && (
+                    <label className="hidden sm:flex items-center gap-1 ml-1 text-[9px] text-zinc-500"
+                           title="Sensitivity (0–1): low groups nearby clicks into fewer longer zooms; high creates more zooms. Soft-capped ~6–8 / min.">
+                        <span>Sens</span>
+                        <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={autoZoomSensitivity}
+                            onChange={(e) => onAutoZoomSensitivity(parseFloat(e.target.value))}
+                            className="w-14 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                            aria-label="Auto Zoom sensitivity"
+                        />
+                    </label>
+                )}
+            </div>
+        )}
 
         <button onClick={onDelete} className="p-1.5 hover:bg-zinc-800 rounded-md text-zinc-400 hover:text-red-400 disabled:opacity-30" disabled={!hasVideo || !selection} title="Delete"><Trash2 size={16} /></button>
         <div className="w-px h-4 bg-zinc-700 mx-2" />

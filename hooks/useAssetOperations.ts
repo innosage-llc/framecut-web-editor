@@ -3,6 +3,7 @@ import React, { Dispatch, SetStateAction, useCallback } from 'react';
 import { MediaAsset, Clip, SpotlightEffect, ExtendedEditorState, RecordingEvent } from '../types';
 import { generateId, getVideoDuration, extractWaveform } from '../utils';
 import { storeAssetInDB, deleteAssetFromDB, getAssetFromDB } from '../utils/db';
+import { generateAutoZooms, mergeAutoZooms, removeAutoZooms, hasClickMetadata } from '../utils/autoZoom';
 import { analyzeAudioSilence, analyzeMousePatterns, generateSimulatedEffects } from '../utils/analysis';
 
 interface UseAssetOperationsProps {
@@ -79,6 +80,8 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
             } else if (type === 'main') {
                 newState.mainVideo = asset;
                 newState.fileName = asset.name;
+                // Plain MP4/image import has no click metadata — clear any prior recording events (Cap parity).
+                newState.recordingEvents = [];
                 const introClips = prev.clips.filter(c => c.mediaType === 'intro');
                 const outroClips = prev.clips.filter(c => c.mediaType === 'outro');
                 const newMainClip: Clip = { id: generateId(), sourceStart: 0, sourceEnd: duration, offset: 0, speed: 1.0, mediaType: 'main' };
@@ -305,31 +308,53 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
             };
 
             currentTimeRef.current = 0;
-            setState(prev => ({
-                ...prev,
-                mainVideo: asset,
-                intro: null,
-                outro: null,
-                audio: null,
-                fileName: name,
-                currentTime: 0,
-                isPlaying: false,
-                clips: [initialClip],
-                audioClips: [],
-                subtitles: [],
-                zoomEffects: [],
-                spotlightEffects: [],
-                mosaicEffects: [],
-                selection: null,
-                isExporting: false,
-                isExportingAudio: false,
-                exportProgress: 0,
-                showSuccessToast: false, 
-                toastMessage: null,
-                duration: duration,
-                coverImage: null,
-                recordingEvents: recordingEvents
-            }));
+            const canAutoZoom = hasClickMetadata(recordingEvents);
+            setState(prev => {
+                const enabled = prev.autoZoomEnabled !== false;
+                let zoomEffects: typeof prev.zoomEffects = [];
+                let toastMessage: string | null = null;
+                let showSuccessToast = false;
+                if (enabled && canAutoZoom) {
+                    zoomEffects = generateAutoZooms(
+                        recordingEvents,
+                        [initialClip],
+                        duration,
+                        { sensitivity: prev.autoZoomSensitivity ?? 0.5 }
+                    );
+                    if (zoomEffects.length > 0) {
+                        toastMessage = `Auto Zoom: ${zoomEffects.length} zoom region(s) (in-tab clicks)`;
+                        showSuccessToast = true;
+                    }
+                }
+                return {
+                    ...prev,
+                    mainVideo: asset,
+                    intro: null,
+                    outro: null,
+                    audio: null,
+                    fileName: name,
+                    currentTime: 0,
+                    isPlaying: false,
+                    clips: [initialClip],
+                    audioClips: [],
+                    subtitles: [],
+                    zoomEffects,
+                    spotlightEffects: [],
+                    mosaicEffects: [],
+                    selection: null,
+                    isExporting: false,
+                    isExportingAudio: false,
+                    exportProgress: 0,
+                    showSuccessToast,
+                    toastMessage,
+                    duration: duration,
+                    coverImage: null,
+                    recordingEvents: recordingEvents
+                };
+            });
+            if (canAutoZoom) {
+                setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
+            }
             
             if (corsCompatible) {
                 extractWaveform(url).then(waveformData => {
@@ -537,9 +562,66 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
         });
     };
 
+    /**
+     * Auto Zoom (#22) regenerate/repair: rebuild cursor-following regions from in-tab
+     * click metadata. Replaces untouched auto regions; keeps manual/edited ones.
+     * Primary path is auto-generate after recording/import; this is on-demand repair.
+     */
+    const handleAutoZoom = useCallback((recordingEvents: RecordingEvent[]) => {
+        if (!hasClickMetadata(recordingEvents)) {
+            alert('Auto Zoom needs a screen recording with clicks captured inside this browser tab. Imported MP4s without click metadata cannot auto-zoom.');
+            return;
+        }
+        pushHistory();
+        setState(prev => {
+            const generated = generateAutoZooms(recordingEvents, prev.clips, prev.duration, {
+                sensitivity: prev.autoZoomSensitivity ?? 0.5
+            });
+            const zoomEffects = mergeAutoZooms(prev.zoomEffects, generated);
+            return {
+                ...prev,
+                autoZoomEnabled: true,
+                zoomEffects,
+                duration: recalculateDuration(prev.clips, prev.audioClips, prev.subtitles, zoomEffects, prev.spotlightEffects, prev.mosaicEffects),
+                toastMessage: `Auto Zoom: ${zoomEffects.filter(z => z.auto).length} zoom region(s) (in-tab clicks)`,
+                showSuccessToast: true
+            };
+        });
+        setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
+    }, [setState, pushHistory, recalculateDuration]);
+
+    /** Remove auto-generated zoom regions only (manual/edited segments stay). */
+    const handleRemoveAutoZooms = useCallback(() => {
+        pushHistory();
+        setState(prev => {
+            const zoomEffects = removeAutoZooms(prev.zoomEffects);
+            return {
+                ...prev,
+                zoomEffects,
+                duration: recalculateDuration(prev.clips, prev.audioClips, prev.subtitles, zoomEffects, prev.spotlightEffects, prev.mosaicEffects),
+                toastMessage: 'Removed auto zoom regions',
+                showSuccessToast: true
+            };
+        });
+        setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 2500);
+    }, [setState, pushHistory, recalculateDuration]);
+
+    const handleSetAutoZoomEnabled = useCallback((enabled: boolean) => {
+        setState(prev => ({ ...prev, autoZoomEnabled: enabled }));
+    }, [setState]);
+
+    const handleSetAutoZoomSensitivity = useCallback((sensitivity: number) => {
+        const s = Math.min(1, Math.max(0, sensitivity));
+        setState(prev => ({ ...prev, autoZoomSensitivity: s }));
+    }, [setState]);
+
     return {
         handleLoadProject,
         handleMagicPolish,
+        handleAutoZoom,
+        handleRemoveAutoZooms,
+        handleSetAutoZoomEnabled,
+        handleSetAutoZoomSensitivity,
         handleUrlImport,
         handleUploadAsset,
         handleSetColorAsset,

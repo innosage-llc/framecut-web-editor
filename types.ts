@@ -62,6 +62,18 @@ export interface ZoomEffect {
   y: number;
   width: number;
   height: number;
+  /** Created by Auto Zoom (#22); re-running Auto Zoom replaces only these. Cleared when the user edits the region. */
+  auto?: boolean;
+  /** Pan the zoom box with the recorded cursor while zoomed. */
+  followCursor?: boolean;
+  /** Recorded cursor positions inside this region, in timeline seconds and 0-100 %. */
+  cursorPath?: CursorPoint[];
+}
+
+export interface CursorPoint {
+  time: number;
+  x: number;
+  y: number;
 }
 
 export interface SpotlightEffect {
@@ -148,6 +160,11 @@ export interface EditorState {
   
   // Recording Data (Persisted for Magic Edit)
   recordingEvents: RecordingEvent[];
+
+  /** Global Auto Zoom master switch (#22). On by default; generates after record/import when click metadata exists. */
+  autoZoomEnabled: boolean;
+  /** 0–1 sensitivity for grouping nearby clicks when auto-generating zooms. */
+  autoZoomSensitivity: number;
 
   // Export Settings
   coverImage: string | null; // Base64 or Blob URL for the video thumbnail/poster
