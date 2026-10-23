@@ -1,6 +1,8 @@
 import React, { useCallback, RefObject } from 'react';
 import { Clip, ExtendedEditorState, PlayerRef } from '../types';
 import { renderProjectAudio, audioBufferToWav } from '../utils/audioRenderer';
+import { DEFAULT_GIF_OPTIONS, GifOptions, GIF_MAX_DURATION_S, GIF_MAX_FILE_BYTES, formatBytes } from '../utils/exportPresets';
+import { encodeGifWithGifJs, getGifSize, GifTooLargeError, resolveGifExportPlan } from '../utils/gifExport';
 
 interface UseExportProps {
     state: ExtendedEditorState;
@@ -47,7 +49,91 @@ const findActiveClipAtTime = (clips: Clip[], time: number, cursor: { index: numb
 };
 
 export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExportProps) => {
-    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a') => {
+    /** Render frames offline, encode with gif.js, enforce length/resolution/size limits. */
+    const exportGif = useCallback(async (opts: GifOptions) => {
+        const player = playerRef.current;
+        if (!player) return;
+        const canvas = player.getCanvas();
+        if (!canvas) throw new Error('No canvas found');
+
+        const plan = resolveGifExportPlan(canvas.width, canvas.height, state.duration, opts);
+        if (state.duration > GIF_MAX_DURATION_S && !opts.trimToMaxDuration) {
+            throw new Error(
+                `GIF exports are limited to ${GIF_MAX_DURATION_S}s. Enable "Trim to ${GIF_MAX_DURATION_S}s" or shorten the project.`
+            );
+        }
+
+        const { width, height, duration } = plan;
+        const frameCanvas = document.createElement('canvas');
+        frameCanvas.width = width;
+        frameCanvas.height = height;
+        const ctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) throw new Error('Could not create GIF frame canvas');
+
+        const fps = opts.fps;
+        const totalFrames = Math.max(1, Math.ceil(duration * fps));
+        const sortedClips = [...state.clips].sort((a, b) => a.offset - b.offset);
+        const clipCursor = { index: 0 };
+        let activeClipId: string | null = null;
+        let activeClipMode: 'video' | 'static' | 'empty' = 'empty';
+        let lastUiUpdate = performance.now();
+        const frames: Array<{ canvas: HTMLCanvasElement }> = [];
+
+        for (let i = 0; i < totalFrames; i++) {
+            const time = Math.min(duration, i / fps);
+            const activeClip = findActiveClipAtTime(sortedClips, time, clipCursor);
+            if (i === 0 || activeClip?.id !== activeClipId) {
+                activeClipMode = await player.prepareExportPlayback(activeClip);
+                activeClipId = activeClip?.id ?? null;
+            }
+            currentTimeRef.current = time;
+            if (activeClip && activeClipMode === 'video') {
+                await player.syncExportPlayback(activeClip.sourceStart + ((time - activeClip.offset) * activeClip.speed));
+            } else {
+                await player.seekTo(time);
+            }
+            player.renderFrame();
+
+            ctx.fillStyle = state.canvasBackgroundColor || '#000000';
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(canvas, 0, 0, width, height);
+            // Copy pixels now; gif.js needs stable frame data across the async render.
+            const copy = document.createElement('canvas');
+            copy.width = width;
+            copy.height = height;
+            copy.getContext('2d')!.drawImage(frameCanvas, 0, 0);
+            frames.push({ canvas: copy });
+
+            if (i === totalFrames - 1 || performance.now() - lastUiUpdate >= 150) {
+                lastUiUpdate = performance.now();
+                const progress = Math.floor(((i + 1) / totalFrames) * 70);
+                setState(prev => ({ ...prev, currentTime: time, exportProgress: progress }));
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+        }
+
+        const blob = await encodeGifWithGifJs(frames, {
+            width,
+            height,
+            fps,
+            loop: opts.loop,
+            onProgress: (p) => setState(prev => ({ ...prev, exportProgress: 70 + Math.floor(p * 25) })),
+        });
+
+        downloadBlob(blob, sanitizeBaseName(state.fileName), 'gif');
+        setState(prev => ({
+            ...prev,
+            isExporting: false,
+            isExportingAudio: false,
+            currentTime: 0,
+            exportProgress: 100,
+            showSuccessToast: true,
+            toastMessage: `GIF exported (${formatBytes(blob.size)})`
+        }));
+        setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
+    }, [state, setState, currentTimeRef, playerRef]);
+
+    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a' | 'gif', gifOptions: GifOptions = DEFAULT_GIF_OPTIONS) => {
         if (state.clips.length === 0 && state.audioClips.length === 0) return;
         if (!playerRef.current) return;
 
@@ -65,6 +151,11 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         }));
 
         try {
+            if (!audioOnly && format === 'gif') {
+                await exportGif(gifOptions);
+                return;
+            }
+
             const audioBuffer = await renderProjectAudio(state);
 
             if (audioOnly) {
@@ -164,14 +255,17 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false })), 3000);
         } catch (e: any) {
             console.error('Offline Export Failed', e);
-            alert('Export failed: ' + e.message);
+            const msg = e instanceof GifTooLargeError
+                ? `${e.message}. Try a lower frame rate or a smaller max size, then export again.`
+                : ('Export failed: ' + (e?.message || e));
+            alert(msg);
             setState(prev => ({ ...prev, isExporting: false, isExportingAudio: false }));
         } finally {
             const recorder = playerRef.current;
             playerRef.current?.stopExportPlayback();
             recorder?.releaseExportCanvas?.();
         }
-    }, [state, setState, currentTimeRef, playerRef]);
+    }, [state, setState, currentTimeRef, playerRef, exportGif]);
 
     return {
         handleExportAction
