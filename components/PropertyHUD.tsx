@@ -57,30 +57,55 @@ const BackgroundFrameControls: React.FC<{
         }
     };
 
+    const turnOn = () => {
+        // Restore polished defaults when turning on from a fully-off state; otherwise just re-enable.
+        if (!frame.enabled && frame.padding === 0 && frame.cornerRadius === 0 && frame.shadow === 0) {
+            onChange({ ...DEFAULT_BACKGROUND_FRAME });
+        } else {
+            update({ enabled: true });
+        }
+    };
+
     return (
         <div className="space-y-2" data-testid="background-frame-controls">
-            <label className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold flex items-center gap-1"><Layout size={10}/> Frame</label>
-            <div className="flex flex-wrap gap-1">
-                <button title="Solid colour" aria-label="Wallpaper: solid colour" onClick={() => update({ wallpaper: { kind: 'color' } })}
-                    className={swatch(frame.wallpaper.kind === 'color')} style={{ backgroundColor: canvasBackgroundColor }} />
-                {GRADIENT_PRESETS.map(g => (
-                    <button key={g.id} title={g.label} aria-label={`Wallpaper: ${g.label}`}
-                        onClick={() => update({ wallpaper: { kind: 'gradient', id: g.id } })}
-                        className={swatch(frame.wallpaper.kind === 'gradient' && frame.wallpaper.id === g.id)}
-                        style={{ backgroundImage: gradientCss(g) }} />
-                ))}
-                <label title="Upload image" aria-label="Wallpaper: upload image"
-                    className={`${swatch(frame.wallpaper.kind === 'image')} cursor-pointer flex items-center justify-center text-[10px] text-zinc-300 bg-white/5 bg-cover bg-center`}
-                    style={frame.wallpaper.kind === 'image' ? { backgroundImage: `url(${frame.wallpaper.dataUrl})` } : undefined}>
-                    {frame.wallpaper.kind === 'image' ? '' : '+'}
-                    <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
-                </label>
+            <div className="flex items-center justify-between">
+                <label className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold flex items-center gap-1"><Layout size={10}/> Frame</label>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={frame.enabled}
+                    aria-label="Frame on/off"
+                    onClick={() => frame.enabled ? update({ enabled: false }) : turnOn()}
+                    className={`relative w-9 h-5 rounded-full transition-colors ${frame.enabled ? 'bg-blue-600' : 'bg-zinc-700'}`}
+                >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${frame.enabled ? 'translate-x-4' : ''}`} />
+                </button>
             </div>
-            {slider('Padding', 'padding', 0.25, 0.01)}
-            {slider('Corners', 'cornerRadius', 0.25, 0.01)}
-            {slider('Shadow', 'shadow', 1, 0.05)}
-            {frame.padding === 0 && frame.wallpaper.kind !== 'color' && (
-                <p className="text-[10px] text-zinc-500">Add padding to show the wallpaper around the recording.</p>
+            {frame.enabled && (
+                <>
+                    <div className="flex flex-wrap gap-1">
+                        <button title="Solid colour" aria-label="Wallpaper: solid colour" onClick={() => update({ wallpaper: { kind: 'color' } })}
+                            className={swatch(frame.wallpaper.kind === 'color')} style={{ backgroundColor: canvasBackgroundColor }} />
+                        {GRADIENT_PRESETS.map(g => (
+                            <button key={g.id} title={g.label} aria-label={`Wallpaper: ${g.label}`}
+                                onClick={() => update({ wallpaper: { kind: 'gradient', id: g.id } })}
+                                className={swatch(frame.wallpaper.kind === 'gradient' && frame.wallpaper.id === g.id)}
+                                style={{ backgroundImage: gradientCss(g) }} />
+                        ))}
+                        <label title="Upload image (your own; no stock assets)" aria-label="Wallpaper: upload image"
+                            className={`${swatch(frame.wallpaper.kind === 'image')} cursor-pointer flex items-center justify-center text-[10px] text-zinc-300 bg-white/5 bg-cover bg-center`}
+                            style={frame.wallpaper.kind === 'image' ? { backgroundImage: `url(${frame.wallpaper.dataUrl})` } : undefined}>
+                            {frame.wallpaper.kind === 'image' ? '' : '+'}
+                            <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                        </label>
+                    </div>
+                    {slider('Padding', 'padding', 0.25, 0.01)}
+                    {slider('Corners', 'cornerRadius', 0.25, 0.01)}
+                    {slider('Shadow', 'shadow', 1, 0.05)}
+                    {frame.padding === 0 && frame.wallpaper.kind !== 'color' && (
+                        <p className="text-[10px] text-zinc-500">Add padding to show the wallpaper around the recording.</p>
+                    )}
+                </>
             )}
         </div>
     );
