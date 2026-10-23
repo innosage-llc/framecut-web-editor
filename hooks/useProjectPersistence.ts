@@ -1,5 +1,6 @@
 
 import React, { useEffect, useCallback, useState, useRef } from 'react';
+import { normalizeBackgroundFrame } from '../utils/backgroundFrame';
 import JSZip from 'jszip';
 import { ExtendedEditorState, EditorState, MediaAsset } from '../types';
 import { generateId, extractWaveform } from '../utils';
@@ -380,6 +381,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                 setState(prev => ({
                     ...prev,
                     ...projectState,
+                    backgroundFrame: normalizeBackgroundFrame(projectState.backgroundFrame),
                     duration,
                     isPlaying: false,
                     isExporting: false,

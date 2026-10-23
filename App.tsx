@@ -278,6 +278,7 @@ const App: React.FC = () => {
                 // Project Settings
                 aspectRatio={state.aspectRatio}
                 canvasBackgroundColor={state.canvasBackgroundColor}
+                backgroundFrame={state.backgroundFrame}
                 projectName={state.fileName}
                 onUpdateProjectSettings={handleUpdateProjectSettings}
                 onMosaicBrushSizeChange={handleMosaicBrushSizeChange}

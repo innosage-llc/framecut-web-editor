@@ -1,3 +1,4 @@
+import type { BackgroundFrame } from './utils/backgroundFrame';
 
 import React from 'react';
 
@@ -132,6 +133,8 @@ export interface EditorState {
   
   // Project Settings
   canvasBackgroundColor: string;
+  /** Wallpaper / padding / corners / shadow around the recording (#24). */
+  backgroundFrame: BackgroundFrame;
   aspectRatio: number;
 
   // Track Data (Absolute Global Time)
