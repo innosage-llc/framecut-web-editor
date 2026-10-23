@@ -4,6 +4,7 @@ import { MediaAsset, Clip, SpotlightEffect, ExtendedEditorState, RecordingEvent 
 import { generateId, getVideoDuration, extractWaveform } from '../utils';
 import { storeAssetInDB, deleteAssetFromDB, getAssetFromDB } from '../utils/db';
 import { generateAutoZooms, mergeAutoZooms, removeAutoZooms, hasClickMetadata } from '../utils/autoZoom';
+import { describeMainVideoBoundWork, clearedMainVideoBoundWork } from '../utils/mainVideoWork';
 import { analyzeAudioSilence, analyzeMousePatterns, generateSimulatedEffects } from '../utils/analysis';
 
 interface UseAssetOperationsProps {
@@ -18,9 +19,21 @@ interface UseAssetOperationsProps {
         mosaicEffects: any[]
     ) => number;
     currentTimeRef: React.MutableRefObject<number>;
+    /** Latest editor state, used to confirm before replacing the main video would discard effects (#26). */
+    stateRef?: React.MutableRefObject<ExtendedEditorState>;
 }
 
-export const useAssetOperations = ({ setState, pushHistory, recalculateDuration, currentTimeRef }: UseAssetOperationsProps) => {
+export const useAssetOperations = ({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef }: UseAssetOperationsProps) => {
+
+    /** Ask before a new (non-relink) main video wipes effects tied to the old media. Returns false if cancelled. */
+    const confirmMainReplacement = (): boolean => {
+        const prev = stateRef?.current;
+        if (!prev || !prev.mainVideo) return true;
+        const summary = describeMainVideoBoundWork(prev);
+        if (!summary) return true;
+        return window.confirm(`Replacing the main video will remove ${summary} made for the current video. Continue?`);
+    };
+
 
     const updateStateWithAsset = (type: 'intro' | 'main' | 'outro' | 'audio', asset: MediaAsset, duration: number, isReplacement: boolean = false) => {
         setState(prev => {
@@ -82,6 +95,8 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
                 newState.fileName = asset.name;
                 // Plain MP4/image import has no click metadata — clear any prior recording events (Cap parity).
                 newState.recordingEvents = [];
+                // Effects are timed against the old media — drop them with it (#26).
+                Object.assign(newState, clearedMainVideoBoundWork());
                 const introClips = prev.clips.filter(c => c.mediaType === 'intro');
                 const outroClips = prev.clips.filter(c => c.mediaType === 'outro');
                 const newMainClip: Clip = { id: generateId(), sourceStart: 0, sourceEnd: duration, offset: 0, speed: 1.0, mediaType: 'main' };
@@ -377,6 +392,7 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
 
     // ... (handleUrlImport kept as is) ...
     const handleUrlImport = async (type: 'intro' | 'main' | 'outro' | 'audio', url: string) => {
+        if (type === 'main' && !confirmMainReplacement()) return;
         pushHistory();
         try {
             const { duration, corsCompatible } = await getVideoDuration(url);
@@ -413,6 +429,7 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
 
     // Modified to accept existingId for Re-linking functionality
     const handleUploadAsset = async (type: 'intro' | 'main' | 'outro' | 'audio', file: File, existingId?: string) => {
+        if (type === 'main' && !existingId && !confirmMainReplacement()) return;
         pushHistory();
         try {
             let storageId = generateId();
