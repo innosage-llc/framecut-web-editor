@@ -972,6 +972,13 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       renderFrame('preview');
   };
 
+  const renderExportFrameAt = async (time: number, width: number, height: number) => {
+      lockExportCanvasSize(width, height);
+      currentTimeRef.current = time;
+      await seekTo(time);
+      renderFrame('export');
+      return exportCanvasRef.current;
+  };
   const renderFrameNow = () => renderFrame(isExportingRef.current ? 'export' : 'preview');
   const getCanvas = () => {
       if ((exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) && sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
@@ -986,7 +993,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       startOfflineSession, addVideoFrame, finishOfflineSession,
       encodeAudioAsM4a,
       prepareExportCanvas: lockExportCanvasSize,
-      releaseExportCanvas: releaseExportCanvasSize
+      releaseExportCanvas: releaseExportCanvasSize,
+      renderExportFrameAt
   }));
 
   useEffect(() => {

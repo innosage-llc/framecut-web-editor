@@ -137,7 +137,9 @@ const App: React.FC = () => {
           cursorPath: z.cursorPath ?? [],
         })),
         spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height })),
-        mosaicEffects: state.mosaicEffects.map(m => ({ id: m.id, start: m.start, end: m.end })),
+        mosaicEffects: state.mosaicEffects.map(m => ({ id: m.id, start: m.start, end: m.end, mode: m.mode, paths: m.paths, x: m.x, y: m.y, width: m.width, height: m.height })),
+        subtitleTransforms: state.subtitles.map(s => ({ id: s.id, x: s.x, y: s.y, rotation: s.rotation, scale: s.scale })),
+        backgroundFrame: state.backgroundFrame,
         subtitles: state.subtitles.map(s => ({ id: s.id, start: s.start, end: s.end, text: s.text })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
@@ -148,9 +150,20 @@ const App: React.FC = () => {
       },
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
+      seek: (t: number) => handleSeek(t),
+      /** Render one export-mode frame and sample RGBA at [x%, y%] points of the export canvas. */
+      sampleExportFrame: async (t: number, points: [number, number][], width = 640, height = 360) => {
+        const p = playerRef.current;
+        if (!p?.renderExportFrameAt) return null;
+        const c = await p.renderExportFrameAt(t, width, height);
+        const ctx = c.getContext('2d')!;
+        const out = points.map(([x, y]) => Array.from(ctx.getImageData(Math.min(c.width - 1, Math.round(x / 100 * c.width)), Math.min(c.height - 1, Math.round(y / 100 * c.height)), 1, 1).data));
+        p.releaseExportCanvas?.();
+        return { width: c.width, height: c.height, pixels: out };
+      },
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, handleSeek, state.backgroundFrame, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
