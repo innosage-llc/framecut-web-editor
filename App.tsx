@@ -136,6 +136,9 @@ const App: React.FC = () => {
           cursorPathLen: z.cursorPath?.length ?? 0,
           cursorPath: z.cursorPath ?? [],
         })),
+        spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height })),
+        mosaicEffects: state.mosaicEffects.map(m => ({ id: m.id, start: m.start, end: m.end })),
+        subtitles: state.subtitles.map(s => ({ id: s.id, start: s.start, end: s.end, text: s.text })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
         hasMainVideo: !!state.mainVideo,
@@ -147,7 +150,7 @@ const App: React.FC = () => {
       removeAutoZooms: () => handleRemoveAutoZooms(),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
