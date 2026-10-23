@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect } from 'react';
-import { Play, Pause, Scissors, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileAudio, Camera, Activity, Crop, Sparkles, Loader2, MousePointerClick, RotateCcw, X } from 'lucide-react';
+import { Play, Pause, Scissors, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, FileAudio, Camera, Activity, Crop, Sparkles, Loader2, MousePointerClick, RotateCcw, X, Circle, Focus } from 'lucide-react';
 import { Selection, Subtitle } from '../types';
 import { formatTimecode } from '../utils';
 
@@ -24,6 +24,10 @@ interface ToolbarProps {
   autoZoomSensitivity?: number;
   onAutoZoomSensitivity?: (value: number) => void;
   hasRecordingEvents?: boolean;
+  /** #23 click polish (in-tab clicks only). */
+  clickRipplesEnabled?: boolean;
+  onToggleClickRipples?: (enabled: boolean) => void;
+  onAutoSpotlight?: () => void;
   onDelete: () => void;
   onDetachAudio: () => void;
   onToggleDebug: () => void;
@@ -53,7 +57,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   isPlaying, selection, hasVideo, isPolishing, onPlayPause, onStepFrame, onZoom, 
   onSplit, onCrop, onMagicPolish, onAutoZoom, onRemoveAutoZooms,
   autoZoomEnabled = true, onToggleAutoZoom, autoZoomSensitivity = 0.5, onAutoZoomSensitivity,
-  hasRecordingEvents, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
+  hasRecordingEvents, clickRipplesEnabled = true, onToggleClickRipples, onAutoSpotlight, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
 }) => {
   const isCropActive = selection?.type === 'crop';
 
@@ -79,6 +83,40 @@ const Toolbar: React.FC<ToolbarProps> = ({
         >
             {isPolishing ? <Loader2 size={16} className="animate-spin text-purple-500" /> : <Sparkles size={16} />}
         </button>
+
+        {/* Click polish (#23): ripples + optional auto-spotlight from in-tab clicks only */}
+        {(onToggleClickRipples || onAutoSpotlight) && (
+            <div className="flex items-center gap-0.5 pl-1 border-l border-zinc-800 ml-0.5"
+                 title="Click polish follows clicks captured inside this browser tab only. Imported MP4s without click metadata get no click polish.">
+                {onToggleClickRipples && (
+                    <button
+                        onClick={() => onToggleClickRipples(!clickRipplesEnabled)}
+                        className={`p-1.5 rounded-md disabled:opacity-30 transition-colors ${clickRipplesEnabled && hasRecordingEvents ? 'bg-amber-900/40 text-amber-400' : 'hover:bg-zinc-800 text-zinc-400 hover:text-amber-400'}`}
+                        disabled={!hasVideo || !hasRecordingEvents}
+                        title={hasRecordingEvents
+                            ? (clickRipplesEnabled ? "Click ripples ON: highlight in-tab clicks in preview + export. Click to turn off." : "Click ripples OFF. Click to show ripples on in-tab clicks.")
+                            : "Click ripples need a screen recording with clicks inside this tab"}
+                        aria-label="Toggle Click Ripples"
+                        aria-pressed={clickRipplesEnabled}
+                    >
+                        <Circle size={16} />
+                    </button>
+                )}
+                {onAutoSpotlight && (
+                    <button
+                        onClick={onAutoSpotlight}
+                        className="p-1.5 hover:bg-amber-900/30 rounded-md text-zinc-400 hover:text-amber-400 disabled:opacity-30 transition-colors"
+                        disabled={!hasVideo || !hasRecordingEvents}
+                        title={hasRecordingEvents
+                            ? "Generate Auto Spotlight on in-tab clicks (editable; replaces previous auto spotlights)"
+                            : "Auto Spotlight needs a screen recording with clicks inside this tab"}
+                        aria-label="Generate Auto Spotlight"
+                    >
+                        <Focus size={14} />
+                    </button>
+                )}
+            </div>
+        )}
 
         {/* Auto Zoom: global toggle (default on) + regenerate / remove */}
         {onAutoZoom && (

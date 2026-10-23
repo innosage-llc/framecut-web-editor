@@ -36,7 +36,7 @@ const App: React.FC = () => {
   // Track mouse hover over the preview player to target Zoom effects
   const previewHoverRef = useRef<{x: number, y: number} | null>(null);
 
-  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef });
+  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleAutoSpotlight, handleSetClickRipplesEnabled, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef });
   const { videoCtx, audioCtx } = usePlaybackContext({ state });
   const { 
       isScreenRecording, 
@@ -136,6 +136,8 @@ const App: React.FC = () => {
           cursorPathLen: z.cursorPath?.length ?? 0,
           cursorPath: z.cursorPath ?? [],
         })),
+        spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height, auto: !!s.auto })),
+        clickRipplesEnabled: state.clickRipplesEnabled !== false,
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
         hasMainVideo: !!state.mainVideo,
@@ -145,9 +147,10 @@ const App: React.FC = () => {
       },
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
+      generateAutoSpotlight: () => handleAutoSpotlight(stateRef.current.recordingEvents),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, handleAutoSpotlight, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
@@ -275,6 +278,8 @@ const App: React.FC = () => {
                 zoomEffects={state.zoomEffects}
                 spotlightEffects={state.spotlightEffects}
                 mosaicEffects={state.mosaicEffects}
+                recordingEvents={state.recordingEvents}
+                clickRipplesEnabled={state.clickRipplesEnabled !== false}
                 
                 selectedZoomEffect={selectedZoomEffect || null}
                 selectedSpotlightEffect={selectedSpotlightEffect || null}
@@ -370,6 +375,9 @@ const App: React.FC = () => {
           autoZoomSensitivity={state.autoZoomSensitivity ?? 0.5}
           onAutoZoomSensitivity={handleSetAutoZoomSensitivity}
           hasRecordingEvents={state.recordingEvents.some(e => e.type === 'click')}
+          clickRipplesEnabled={state.clickRipplesEnabled !== false}
+          onToggleClickRipples={handleSetClickRipplesEnabled}
+          onAutoSpotlight={() => handleAutoSpotlight(state.recordingEvents)}
           onDelete={handleDelete}
           onDetachAudio={handleDetachAudio}
           onToggleDebug={handleToggleDebug}

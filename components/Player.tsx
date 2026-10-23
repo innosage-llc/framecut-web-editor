@@ -1,11 +1,12 @@
 
 import React, { useRef, useEffect, useState, forwardRef, useImperativeHandle, memo } from 'react';
-import { Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, PlayerRef, Clip, ExtendedEditorState } from '../types';
+import { Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, PlayerRef, Clip, ExtendedEditorState, RecordingEvent } from '../types';
 import { RotateCcw, Check, Crosshair } from 'lucide-react';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useCanvasRecorder } from '../hooks/useCanvasRecorder';
 import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, calculateZoomRect } from '../utils/canvasRenderer';
 import PropertyHUD from './PropertyHUD';
+import { getActiveClickRipples, renderClickRipples } from '../utils/clickPolish';
 import { BackgroundFrame, isFrameActive, getFrameContentRect, drawWallpaper, drawFramedContent } from '../utils/backgroundFrame';
 
 type TimedItem = { start: number; end: number };
@@ -130,6 +131,9 @@ interface PlayerProps {
   aspectRatio: number;
   canvasBackgroundColor: string;
   backgroundFrame?: BackgroundFrame;
+  /** #23: in-tab click metadata for click ripples (main clip only). */
+  recordingEvents?: RecordingEvent[];
+  clickRipplesEnabled?: boolean;
   projectName: string | null;
   onUpdateProjectSettings: (updates: Partial<ExtendedEditorState>) => void;
   onMosaicBrushSizeChange: (size: number) => void;
@@ -184,6 +188,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   aspectRatio,
   canvasBackgroundColor,
   backgroundFrame,
+  recordingEvents,
+  clickRipplesEnabled = true,
   projectName,
   onUpdateProjectSettings,
   onMosaicBrushSizeChange
@@ -236,6 +242,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   
   const canvasBackgroundColorRef = useRef(canvasBackgroundColor);
   const backgroundFrameRef = useRef(backgroundFrame);
+  const recordingEventsRef = useRef(recordingEvents);
+  recordingEventsRef.current = recordingEvents;
+  const clickRipplesEnabledRef = useRef(clickRipplesEnabled);
+  clickRipplesEnabledRef.current = clickRipplesEnabled;
   const frameContentCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const wallpaperImageRef = useRef<HTMLImageElement | null>(null);
   const playbackRateRef = useRef(playbackRate);
@@ -929,6 +939,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
             if (!isEditingZoomState && !editingCrop) {
                 if (mosaic) renderMosaic(ctx, video, mosaic, pixelCanvasRef.current, maskCanvasRef.current, cw, ch, cropInfo, playing);
                 if (spotlight) renderSpotlight(ctx, spotlight, cw, ch, selectedSpotlight, playing, currentGlobalTime, cropInfo);
+            }
+            // #23: additive click ripples from in-tab click metadata (OS cursor stays baked in).
+            if (activeMediaType === 'main' && clickRipplesEnabledRef.current !== false && !editingCrop) {
+                renderClickRipples(ctx, getActiveClickRipples(recordingEventsRef.current, currentSourceTime), cw, ch, cropInfo);
             }
         }
     }

@@ -4,6 +4,7 @@ import { MediaAsset, Clip, SpotlightEffect, ExtendedEditorState, RecordingEvent 
 import { generateId, getVideoDuration, extractWaveform } from '../utils';
 import { storeAssetInDB, deleteAssetFromDB, getAssetFromDB } from '../utils/db';
 import { generateAutoZooms, mergeAutoZooms, removeAutoZooms, hasClickMetadata } from '../utils/autoZoom';
+import { generateAutoSpotlights, mergeAutoSpotlights } from '../utils/clickPolish';
 import { analyzeAudioSilence, analyzeMousePatterns, generateSimulatedEffects } from '../utils/analysis';
 
 interface UseAssetOperationsProps {
@@ -606,6 +607,31 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
         setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 2500);
     }, [setState, pushHistory, recalculateDuration]);
 
+    /** #23: optional auto-spotlight from in-tab clicks. Replaces previous auto spotlights, keeps manual ones. */
+    const handleAutoSpotlight = useCallback((recordingEvents: RecordingEvent[]) => {
+        if (!hasClickMetadata(recordingEvents)) {
+            alert('Auto Spotlight needs a screen recording with clicks captured inside this browser tab. Imported MP4s without click metadata have no click polish.');
+            return;
+        }
+        pushHistory();
+        setState(prev => {
+            const generated = generateAutoSpotlights(recordingEvents, prev.clips, generateId);
+            const spotlightEffects = mergeAutoSpotlights(prev.spotlightEffects, generated);
+            return {
+                ...prev,
+                spotlightEffects,
+                duration: recalculateDuration(prev.clips, prev.audioClips, prev.subtitles, prev.zoomEffects, spotlightEffects, prev.mosaicEffects),
+                toastMessage: `Auto Spotlight: ${generated.length} spotlight(s) from in-tab clicks`,
+                showSuccessToast: true
+            };
+        });
+        setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
+    }, [setState, pushHistory, recalculateDuration]);
+
+    const handleSetClickRipplesEnabled = useCallback((enabled: boolean) => {
+        setState(prev => ({ ...prev, clickRipplesEnabled: enabled }));
+    }, [setState]);
+
     const handleSetAutoZoomEnabled = useCallback((enabled: boolean) => {
         setState(prev => ({ ...prev, autoZoomEnabled: enabled }));
     }, [setState]);
@@ -620,6 +646,8 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
         handleMagicPolish,
         handleAutoZoom,
         handleRemoveAutoZooms,
+        handleAutoSpotlight,
+        handleSetClickRipplesEnabled,
         handleSetAutoZoomEnabled,
         handleSetAutoZoomSensitivity,
         handleUrlImport,
