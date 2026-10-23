@@ -17,7 +17,7 @@ import { useAssetOperations } from './hooks/useAssetOperations';
 import { usePlaybackContext } from './hooks/usePlaybackContext';
 import { useExport } from './hooks/useExport';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
-import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip } from './types';
+import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip, RecordingEvent } from './types';
 
 const App: React.FC = () => {
   const {
@@ -88,6 +88,39 @@ const App: React.FC = () => {
   useEffect(() => {
     document.title = isScreenRecording ? `${formatTimeShort(recordingDuration)} • Recording` : "FrameCut Web Editor";
   }, [isScreenRecording, recordingDuration]);
+
+  // Playwright E2E seam (opt-in via window.__FRAMECUT_E2E_ENABLED__). Not used in production UI.
+  useEffect(() => {
+    const w = window as any;
+    if (!w.__FRAMECUT_E2E_ENABLED__) return;
+    w.__FRAMECUT_E2E__ = {
+      getSnapshot: () => ({
+        recordingEvents: state.recordingEvents,
+        zoomEffects: state.zoomEffects.map(z => ({
+          id: z.id,
+          start: z.start,
+          end: z.end,
+          auto: !!z.auto,
+          followCursor: !!z.followCursor,
+          width: z.width,
+          height: z.height,
+          x: z.x,
+          y: z.y,
+          cursorPathLen: z.cursorPath?.length ?? 0,
+          cursorPath: z.cursorPath ?? [],
+        })),
+        autoZoomEnabled: state.autoZoomEnabled !== false,
+        duration: state.duration,
+        hasMainVideo: !!state.mainVideo,
+      }),
+      loadWithEvents: async (blob: Blob, events: RecordingEvent[], durationHint?: number) => {
+        await handleLoadProject(blob, 'E2E In-tab Recording', events, durationHint);
+      },
+      generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
+      removeAutoZooms: () => handleRemoveAutoZooms(),
+    };
+    return () => { delete w.__FRAMECUT_E2E__; };
+  }, [state.recordingEvents, state.zoomEffects, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
