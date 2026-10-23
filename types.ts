@@ -198,6 +198,8 @@ export interface PlayerRef {
   finishOfflineSession: () => Promise<Blob>;
   prepareExportCanvas?: (width: number, height: number) => HTMLCanvasElement;
   releaseExportCanvas?: () => void;
+  /** Test seam: render one export-mode frame at `time` into a locked export canvas of width×height. */
+  renderExportFrameAt?: (time: number, width: number, height: number) => Promise<HTMLCanvasElement>;
   prepareExportPlayback: (clip: Clip | null) => Promise<'video' | 'static' | 'empty'>;
   syncExportPlayback: (sourceTime: number) => Promise<void>;
   stopExportPlayback: () => void;

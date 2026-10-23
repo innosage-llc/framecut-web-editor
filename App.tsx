@@ -138,6 +138,8 @@ const App: React.FC = () => {
         })),
         spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height, auto: !!s.auto })),
         clickRipplesEnabled: state.clickRipplesEnabled !== false,
+        backgroundFrame: state.backgroundFrame,
+        clips: state.clips.map(c => ({ id: c.id, mediaType: c.mediaType, offset: c.offset, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd, speed: c.speed })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
         hasMainVideo: !!state.mainVideo,
@@ -147,10 +149,20 @@ const App: React.FC = () => {
       },
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
+      /** Render one export-mode frame and sample RGBA at [x%, y%] points of the export canvas. */
+      sampleExportFrame: async (t: number, points: [number, number][], width = 640, height = 360) => {
+        const p = playerRef.current;
+        if (!p?.renderExportFrameAt) return null;
+        const c = await p.renderExportFrameAt(t, width, height);
+        const ctx = c.getContext('2d')!;
+        const out = points.map(([x, y]) => Array.from(ctx.getImageData(Math.min(c.width - 1, Math.round(x / 100 * c.width)), Math.min(c.height - 1, Math.round(y / 100 * c.height)), 1, 1).data));
+        p.releaseExportCanvas?.();
+        return { width: c.width, height: c.height, pixels: out };
+      },
       generateAutoSpotlight: () => handleAutoSpotlight(stateRef.current.recordingEvents),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, handleAutoSpotlight, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
