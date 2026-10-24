@@ -103,3 +103,94 @@ test('recorded in-tab clicks → ripples at click points in export frames, Auto 
   const [on] = await sampleAtSourcePct(page, toTimeline(c0.time) + 0.1, [[c0.x, c0.y]]);
   expect(tint(on)).toBeGreaterThan(tint(off) + 25);
 });
+
+test('6 recorded clicks (2 quick): ripple per click; Auto Spotlight groups the quick pair, skips a trimmed click, keeps manual; export + toggle', async ({ page }) => {
+  test.setTimeout(120000);
+  await mockDisplayMedia(page);
+  await page.goto('/');
+  await page.waitForFunction(() => !!(window as any).__FRAMECUT_E2E__);
+  await page.getByRole('button', { name: 'Start Recording' }).click();
+  await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 15000 });
+  const vp = page.viewportSize() || { width: 1280, height: 720 };
+  await page.waitForTimeout(700);
+  // [fx, fy, wait-after ms]; #1→#2 is the quick pair (~0.4s apart, < 0.8s merge gap).
+  const PLAN = [[0.30, 0.25, 400], [0.34, 0.28, 1400], [0.70, 0.25, 1400], [0.45, 0.42, 1400], [0.75, 0.42, 1400], [0.55, 0.30, 1400]] as const;
+  for (const [fx, fy, wait] of PLAN) {
+    await page.mouse.move(vp.width * fx, vp.height * fy);
+    await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(wait);
+  }
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__?.getSnapshot?.().hasMainVideo, null, { timeout: 20000 });
+  await page.evaluate(() => (window as any).__FRAMECUT_E2E__.removeAutoZooms());
+  await expect.poll(async () => (await snap(page)).zoomEffects.length).toBe(0);
+
+  let s = await snap(page);
+  const clicks = s.recordingEvents.filter((e: any) => e.type === 'click').slice(0, 6);
+  expect(clicks.length).toBe(6);
+  expect(clicks[1].time - clicks[0].time).toBeLessThan(0.8);
+  for (let i = 2; i < 6; i++) expect(clicks[i].time - clicks[i - 1].time).toBeGreaterThan(0.8);
+  // Positions recorded as % of the viewport.
+  clicks.forEach((c: any, i: number) => { expect(Math.abs(c.x - PLAN[i][0] * 100)).toBeLessThan(1); expect(Math.abs(c.y - PLAN[i][1] * 100)).toBeLessThan(1); });
+
+  // Ripple at each click's time + position in export frames (untrimmed: timeline time == source time).
+  for (const c of clicks) {
+    const [during] = await sampleAtSourcePct(page, c.time + 0.1, [[c.x, c.y]]);
+    const [after] = await sampleAtSourcePct(page, c.time + 1.0, [[c.x, c.y]]);
+    expect(tint(during), `ripple at click t=${c.time.toFixed(2)}`).toBeGreaterThan(tint(after) + 25);
+  }
+
+  // Trim out click #4 (index 3): keep source [0, c4-0.3] and [c4+0.3, end].
+  const main = s.clips.find((c: any) => c.mediaType === 'main');
+  const cut = clicks[3].time;
+  await page.evaluate(([a, b, end]) => (window as any).__FRAMECUT_E2E__.setMainSourceRanges([[0, a], [b, end]]), [cut - 0.3, cut + 0.3, main.sourceEnd]);
+  await expect.poll(async () => (await snap(page)).clips.filter((c: any) => c.mediaType === 'main').length).toBe(2);
+  s = await snap(page);
+  const mains = s.clips.filter((c: any) => c.mediaType === 'main');
+  const toTimeline = (src: number) => { for (const c of mains) if (src >= c.sourceStart && src <= c.sourceEnd) return c.offset + (src - c.sourceStart) / (c.speed || 1); return null; };
+
+  // Manual spotlight first (must survive regenerate).
+  await page.getByTitle('Add Spotlight Effect').click();
+  await expect.poll(async () => (await snap(page)).spotlightEffects.filter((x: any) => !x.auto).length).toBe(1);
+  const manualId = (await snap(page)).spotlightEffects.find((x: any) => !x.auto).id;
+
+  const checkAutos = async () => {
+    const all = (await snap(page)).spotlightEffects;
+    const autos = all.filter((x: any) => x.auto);
+    const centredOn = (a: any, c: any) => Math.abs(a.x + a.width / 2 - c.x) < 3 && Math.abs(a.y + a.height / 2 - c.y) < 3;
+    const activeAt = (a: any, t: number) => a.start <= t && a.end >= t;
+    // Quick pair → exactly ONE region covering both clicks, centred between them.
+    const t0 = toTimeline(clicks[0].time)!, t1 = toTimeline(clicks[1].time)!;
+    const pair = autos.filter((a: any) => activeAt(a, t0) || activeAt(a, t1));
+    expect(pair.length).toBe(1);
+    expect(activeAt(pair[0], t0) && activeAt(pair[0], t1)).toBe(true);
+    expect(centredOn(pair[0], { x: (clicks[0].x + clicks[1].x) / 2, y: (clicks[0].y + clicks[1].y) / 2 })).toBe(true);
+    // Trimmed click #4 → no region.
+    expect(toTimeline(clicks[3].time)).toBeNull();
+    expect(autos.some((a: any) => centredOn(a, clicks[3]))).toBe(false);
+    // Clicks #3, #5, #6 → one region each, active at their timeline time.
+    for (const i of [2, 4, 5]) {
+      const t = toTimeline(clicks[i].time)!;
+      expect(autos.filter((a: any) => centredOn(a, clicks[i]) && activeAt(a, t)).length, `click #${i + 1}`).toBe(1);
+    }
+    expect(all.some((x: any) => x.id === manualId && !x.auto)).toBe(true);
+    return autos;
+  };
+
+  await page.getByRole('button', { name: 'Generate Auto Spotlight' }).click();
+  await expect.poll(async () => (await snap(page)).spotlightEffects.filter((x: any) => x.auto).length).toBeGreaterThanOrEqual(4);
+  const first = await checkAutos();
+  // Regenerate: replaces autos (new ids, same count), manual survives.
+  await page.getByRole('button', { name: 'Generate Auto Spotlight' }).click();
+  await expect.poll(async () => (await snap(page)).spotlightEffects.filter((x: any) => x.auto).map((x: any) => x.id).join()).not.toBe(first.map((x: any) => x.id).join());
+  const second = await checkAutos();
+  expect(second.length).toBe(first.length);
+
+  // Export frames after trim: ripple at click #5 (timeline-mapped); toggle off removes it.
+  const c5 = clicks[4]; const t5 = toTimeline(c5.time)!;
+  const [on] = await sampleAtSourcePct(page, t5 + 0.1, [[c5.x, c5.y]]);
+  await page.getByRole('button', { name: 'Toggle Click Ripples' }).click();
+  await expect.poll(async () => (await snap(page)).clickRipplesEnabled).toBe(false);
+  const [off] = await sampleAtSourcePct(page, t5 + 0.1, [[c5.x, c5.y]]);
+  expect(tint(on)).toBeGreaterThan(tint(off) + 25);
+});

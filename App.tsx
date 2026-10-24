@@ -159,10 +159,19 @@ const App: React.FC = () => {
         p.releaseExportCanvas?.();
         return { width: c.width, height: c.height, pixels: out };
       },
+      /** Test seam: rebuild the main track as back-to-back clips covering the given source ranges (simulates trims). */
+      setMainSourceRanges: (ranges: [number, number][]) => setState(prev => {
+        const main = prev.clips.find(c => c.mediaType === 'main');
+        if (!main) return prev;
+        let offset = main.offset;
+        const mains = ranges.map(([a, b], i) => { const c = { ...main, id: `${main.id}-r${i}`, sourceStart: a, sourceEnd: b, offset }; offset += (b - a) / (main.speed || 1); return c; });
+        const clips = [...prev.clips.filter(c => c.mediaType !== 'main'), ...mains];
+        return { ...prev, clips, duration: recalculateDuration(clips, prev.audioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects) };
+      }),
       generateAutoSpotlight: () => handleAutoSpotlight(stateRef.current.recordingEvents),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
