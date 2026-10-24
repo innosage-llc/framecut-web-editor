@@ -202,7 +202,8 @@ const ExportModal: React.FC<ExportModalProps> = ({
         );
     }
 
-    if (!isExporting && (progress === 0 || progress === 100)) return null;
+    // Progress overlay is driven only by isExporting, so a failed export can never leave it stuck.
+    if (!isExporting) return null;
 
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80] flex items-center justify-center">

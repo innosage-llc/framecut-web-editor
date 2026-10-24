@@ -265,8 +265,9 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const msg = e instanceof GifTooLargeError
                 ? `${e.message}. Try a lower frame rate or a smaller max size, then export again.`
                 : ('Export failed: ' + (e?.message || e));
+            // Reset progress too: the overlay used to stay up because it only hid at 0 or 100 %.
+            setState(prev => ({ ...prev, isExporting: false, isExportingAudio: false, exportProgress: 0 }));
             alert(msg);
-            setState(prev => ({ ...prev, isExporting: false, isExportingAudio: false }));
         } finally {
             const recorder = playerRef.current;
             playerRef.current?.stopExportPlayback();
