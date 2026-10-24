@@ -53,8 +53,13 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
     const exportGif = useCallback(async (opts: GifOptions) => {
         const player = playerRef.current;
         if (!player) return;
-        const canvas = player.getCanvas();
-        if (!canvas) throw new Error('No canvas found');
+        // Lock the export canvas at source size and render into it explicitly. Previously getCanvas()
+        // ran before isExporting committed and returned the (never-updated) preview canvas.
+        const sourceCanvas = player.getCanvas();
+        if (!sourceCanvas) throw new Error('No canvas found');
+        const canvas = player.prepareExportCanvas
+            ? player.prepareExportCanvas(sourceCanvas.width, sourceCanvas.height)
+            : sourceCanvas;
 
         const plan = resolveGifExportPlan(canvas.width, canvas.height, state.duration, opts);
         if (state.duration > GIF_MAX_DURATION_S && !opts.trimToMaxDuration) {
@@ -83,7 +88,8 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const time = Math.min(duration, i / fps);
             const activeClip = findActiveClipAtTime(sortedClips, time, clipCursor);
             if (i === 0 || activeClip?.id !== activeClipId) {
-                activeClipMode = await player.prepareExportPlayback(activeClip);
+                // GIF export isn't realtime: seek frame-accurately instead of free-running playback.
+                activeClipMode = await player.prepareExportPlayback(activeClip, { frameAccurate: true });
                 activeClipId = activeClip?.id ?? null;
             }
             currentTimeRef.current = time;
@@ -92,7 +98,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             } else {
                 await player.seekTo(time);
             }
-            player.renderFrame();
+            player.renderFrame('export');
 
             ctx.fillStyle = state.canvasBackgroundColor || '#000000';
             ctx.fillRect(0, 0, width, height);
@@ -141,6 +147,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         const baseName = sanitizeBaseName(state.fileName);
 
         currentTimeRef.current = 0;
+        player.beginExport?.();
         setState(prev => ({
             ...prev,
             isPlaying: false,
@@ -223,7 +230,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
                     await player.seekTo(time);
                 }
 
-                player.renderFrame();
+                player.renderFrame('export');
 
                 const timestampUs = time * 1_000_000;
                 const isKeyFrame = i % (fps * 2) === 0;
@@ -264,6 +271,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const recorder = playerRef.current;
             playerRef.current?.stopExportPlayback();
             recorder?.releaseExportCanvas?.();
+            recorder?.endExport?.();
         }
     }, [state, setState, currentTimeRef, playerRef, exportGif]);
 
