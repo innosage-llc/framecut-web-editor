@@ -667,7 +667,14 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           }
           const onSeeked = () => {
               video!.removeEventListener('seeked', onSeeked);
-              resolve();
+              // 'seeked' can fire before the paused element has a presentable frame; drawing it right
+              // away (export / frame capture) may yield a blank frame. Wait for the frame callback.
+              const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+              if (typeof v.requestVideoFrameCallback !== 'function') { resolve(); return; }
+              let settled = false;
+              const finish = () => { if (!settled) { settled = true; resolve(); } };
+              v.requestVideoFrameCallback(finish);
+              window.setTimeout(finish, 250);
           };
           video!.addEventListener('seeked', onSeeked, { once: true });
           video!.currentTime = sourceTime;
@@ -1058,7 +1065,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useEffect(() => {
       const videos = [introVideoRef.current, mainVideoRef.current, outroVideoRef.current].filter(Boolean) as HTMLVideoElement[];
       const redraw = () => {
-          if (isPlayingRef.current || isExportingRef.current || internalPreviewTimeRef.current !== null) return;
+          // Skip while an export/sample render owns the video element (export canvas locked): a preview
+          // redraw would run syncMediaState and re-seek the shared <video> under the export frame.
+          if (isPlayingRef.current || isExportingRef.current || exportCanvasLockRef.current || internalPreviewTimeRef.current !== null) return;
           renderFrame('preview');
       };
       videos.forEach(v => { v.addEventListener('seeked', redraw); v.addEventListener('loadeddata', redraw); });
