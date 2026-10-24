@@ -143,6 +143,7 @@ const App: React.FC = () => {
         subtitles: state.subtitles.map(s => ({ id: s.id, start: s.start, end: s.end, text: s.text })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
+        currentTime: state.currentTime,
         hasMainVideo: !!state.mainVideo,
       }),
       loadWithEvents: async (blob: Blob, events: RecordingEvent[], durationHint?: number) => {
@@ -164,7 +165,7 @@ const App: React.FC = () => {
       },
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, handleSeek, handleUpdateProjectSettings, state.backgroundFrame, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, state.duration, state.currentTime, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, handleSeek, handleUpdateProjectSettings, state.backgroundFrame, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
