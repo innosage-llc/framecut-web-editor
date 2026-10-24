@@ -74,7 +74,8 @@ test('30s export at 480p streams to a 300-frame GIF with bounded JS heap', async
   const gif = await decodeGif(page, fs.readFileSync(file));
   expect(gif.count).toBe(300);
   expect([gif.w, gif.h]).toEqual([480, 270]);
-  expect(new Set(gif.hashes).size).toBeGreaterThan(250);
+  expect(gif.hashes.filter((h, i) => i > 0 && h === gif.hashes[i - 1]).length).toBe(0); // no repeated frames
+  expect(new Set(gif.hashes).size).toBe(300);
   // Holding all RGBA frames (old gif.js path) would need 300 × 480 × 270 × 4 ≈ 155 MB.
   // Streaming keeps at most GIF_MAX_FRAMES_IN_FLIGHT frames + the encoded output.
   const growthMB = (peak - baseline) / (1024 * 1024);

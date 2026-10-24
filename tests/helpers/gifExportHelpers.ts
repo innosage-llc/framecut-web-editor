@@ -55,7 +55,7 @@ export const decodeGif = (page: Page, bytes: Buffer) => page.evaluate(async (b64
     ctx.drawImage(image, 0, 0); image.close();
     const d = ctx.getImageData(0, 0, w, h).data;
     let hash = 0;
-    for (let k = 0; k < d.length; k += 61) hash = (hash * 31 + d[k]) | 0;
+    for (let k = 0; k < d.length; k += 1) hash = (hash * 31 + d[k]) | 0;
     hashes.push(hash);
   }
   return { count, w, h, hashes };

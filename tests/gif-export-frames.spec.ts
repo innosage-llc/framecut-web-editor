@@ -23,7 +23,11 @@ test('GIF export contains ~fps*duration mostly distinct frames at the export siz
 
   expect(gif.count).toBe(100); // 10s @ 10fps
   expect([gif.w, gif.h]).toEqual([480, 270]);
-  expect(new Set(gif.hashes).size).toBeGreaterThanOrEqual(80);
+  // The 10fps sample of the 30fps test pattern changes every frame: every GIF frame must be distinct
+  // and no two consecutive frames may repeat (main: 1 distinct; free-running playback sync: ~10 repeats).
+  const repeats = gif.hashes.filter((h, i) => i > 0 && h === gif.hashes[i - 1]).length;
+  expect(repeats).toBe(0);
+  expect(new Set(gif.hashes).size).toBe(100);
   expect(gif.hashes[0]).not.toBe(gif.hashes[50]);
   await expect(page.getByText('Exporting...')).toBeHidden();
 });
