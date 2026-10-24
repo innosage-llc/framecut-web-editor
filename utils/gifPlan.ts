@@ -1,20 +1,19 @@
 /**
  * Adaptive GIF export planning (client-side only, gifenc).
  *
- * PROVISIONAL: every number in this file (size caps, bytes-per-pixel heuristic, downgrade ladder,
- * memory budgets) is a provisional product default pending Jingtian's sign-off. Pro / free tiers are
+ * Size caps (50 MB hard, warning above 15 MB) are approved product defaults. Pro / free tiers are
  * NOT modelled here: they depend on the open licensing decision in #30.
  */
 
-/** PROVISIONAL hard cap on the encoded GIF (the encoder aborts above this). */
+/** Hard cap on the encoded GIF (the encoder aborts above this). */
 export const GIF_HARD_MAX_FILE_BYTES = 50 * 1024 * 1024;
-/** PROVISIONAL soft cap: above this the export dialog warns that the file will be large. */
+/** Soft cap: above this the export dialog warns that the file will be large. */
 export const GIF_WARN_FILE_BYTES = 15 * 1024 * 1024;
 /** Longest output side (px). */
 export const GIF_MAX_LONGEST_SIDE = 1280;
 
 /**
- * PROVISIONAL bytes per output pixel per frame for screen recordings with a 256-colour palette
+ * Bytes per output pixel per frame for screen recordings with a 256-colour palette
  * (gifenc, per-frame palette, LZW). Measured on UI captures: ~0.05 (static UI) – 0.25 (busy video).
  * 0.15 is a deliberately pessimistic middle so estimates rarely undershoot.
  */
@@ -22,7 +21,7 @@ export const GIF_BYTES_PER_PIXEL_FRAME = 0.15;
 /** Smaller palettes compress better (shorter LZW codes). Relative to 256 colours. */
 const PALETTE_FACTOR: Record<number, number> = { 256: 1, 128: 0.85, 64: 0.72 };
 
-/** PROVISIONAL downgrade ladders, tried in order until the estimate fits. */
+/** Downgrade ladders, tried in order until the estimate fits. */
 export const GIF_FPS_LADDER = [15, 12, 10, 8, 6, 5] as const;
 export const GIF_SIDE_LADDER = [1280, 960, 720, 640, 480, 360, 320] as const;
 export const GIF_PALETTE_LADDER = [256, 128, 64] as const;
@@ -50,7 +49,7 @@ export const readDeviceBudget = (): DeviceBudget => {
 };
 
 /**
- * PROVISIONAL effective byte cap for this device. The encoder keeps the whole output in memory
+ * Effective byte cap for this device. The encoder keeps the whole output in memory
  * (plus one copy when building the Blob), so low-memory devices get a lower cap.
  */
 export const effectiveHardCap = (budget: DeviceBudget = {}) => {
@@ -88,7 +87,7 @@ export interface GifPlan {
     hardCapBytes: number;
     /** Human-readable list of automatic downgrades applied (empty = exported as requested). */
     downgrades: string[];
-    /** Estimate is above the PROVISIONAL warning size. */
+    /** Estimate is above the warning size. */
     warnLarge: boolean;
     /** Even the lowest web settings can't fit the whole project: export is trimmed; suggest the macOS app. */
     exceedsWebLimits: boolean;
