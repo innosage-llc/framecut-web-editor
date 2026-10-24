@@ -202,6 +202,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const exportCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null); 
+  // Layer matching the drawn video content rect (padded when Background Frame is on).
+  const overlayRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef<number | null>(null);
   
   const internalPreviewTimeRef = useRef<number | null>(null);
@@ -325,6 +327,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       isPlaying,
       currentTimeRef,
       contentRef,
+      overlayRef,
       currentBrushSize,
       onUpdateSubtitle,
       onUpdateZoomEffect,
@@ -969,6 +972,13 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       renderFrame('preview');
   };
 
+  const renderExportFrameAt = async (time: number, width: number, height: number) => {
+      lockExportCanvasSize(width, height);
+      currentTimeRef.current = time;
+      await seekTo(time);
+      renderFrame('export');
+      return exportCanvasRef.current;
+  };
   const renderFrameNow = () => renderFrame(isExportingRef.current ? 'export' : 'preview');
   const getCanvas = () => {
       if ((exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) && sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
@@ -983,7 +993,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       startOfflineSession, addVideoFrame, finishOfflineSession,
       encodeAudioAsM4a,
       prepareExportCanvas: lockExportCanvasSize,
-      releaseExportCanvas: releaseExportCanvasSize
+      releaseExportCanvas: releaseExportCanvasSize,
+      renderExportFrameAt
   }));
 
   useEffect(() => {
@@ -1029,6 +1040,19 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       containerSize.width,
       containerSize.height
   ]);
+
+  // Paused preview: a seek (or first decode) finishes asynchronously, but renderFrame bails while the
+  // video is still seeking (readyState < 2). Redraw once the frame is actually available, otherwise the
+  // preview stays on a stale/black frame and newly drawn effects (e.g. brush blur) don't show (#26 QA).
+  useEffect(() => {
+      const videos = [introVideoRef.current, mainVideoRef.current, outroVideoRef.current].filter(Boolean) as HTMLVideoElement[];
+      const redraw = () => {
+          if (isPlayingRef.current || isExportingRef.current || internalPreviewTimeRef.current !== null) return;
+          renderFrame('preview');
+      };
+      videos.forEach(v => { v.addEventListener('seeked', redraw); v.addEventListener('loadeddata', redraw); });
+      return () => videos.forEach(v => { v.removeEventListener('seeked', redraw); v.removeEventListener('loadeddata', redraw); });
+  }, [introSrc, mainSrc, outroSrc]);
 
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
     const video = e.currentTarget;
@@ -1080,6 +1104,17 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       transform: 'none', 
       margin: 0
   } : {};
+
+  // #26: effects are drawn inside getFrameContentRect when the frame is active, so edit
+  // handles and pointer mapping must use that same padded rect (renderFrame turns the
+  // frame off while editing crop/zoom, so mirror that here).
+  const overlayFrameActive = isFrameActive(backgroundFrame) && !isEditingCrop && !isEditingZoom && containerSize.width > 0 && containerSize.height > 0;
+  const overlayLayerStyle: React.CSSProperties = overlayFrameActive
+      ? (() => {
+          const r = getFrameContentRect(containerSize.width, containerSize.height, backgroundFrame!);
+          return { position: 'absolute', left: `${(r.x / containerSize.width) * 100}%`, top: `${(r.y / containerSize.height) * 100}%`, width: `${(r.width / containerSize.width) * 100}%`, height: `${(r.height / containerSize.height) * 100}%`, pointerEvents: 'none' };
+      })()
+      : { position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' };
 
   let currentSelection: any = null;
   if (selectedSubtitleId) currentSelection = { type: 'subtitle', id: selectedSubtitleId };
@@ -1173,8 +1208,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           </div>
         )}
 
+        <div ref={overlayRef} data-testid="effect-overlay-layer" className="z-30" style={overlayLayerStyle}>
         {isEditingSpotlight && selectedSpotlightEffect && (
-          <div className="absolute z-30" style={{ ...spotlightStyle, touchAction: 'none' }} onMouseDown={(e) => handleSpotlightMouseDown(e, 'move')}>
+          <div className="absolute z-30 pointer-events-auto" style={{ ...spotlightStyle, touchAction: 'none' }} onMouseDown={(e) => handleSpotlightMouseDown(e, 'move')}>
              {/* Spotlight Edit UI */}
              <div className="w-full h-full border-2 border-amber-400 bg-amber-500/10 cursor-move relative shadow-sm rounded-full group">
                 <div className="absolute -left-1.5 -top-1.5 w-3 h-3 bg-white border border-amber-500 rounded-full cursor-nw-resize z-40" onMouseDown={(e) => handleSpotlightMouseDown(e, 'resize-tl')} />
@@ -1186,7 +1222,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
         )}
 
         {isEditingMosaic && selectedMosaicEffect && (
-          <div className="absolute z-30" style={{ ...mosaicBoxStyle, touchAction: 'none' }} onMouseDown={(e) => handleMosaicMouseDown(e, 'move')}>
+          <div className="absolute z-30 pointer-events-auto" style={{ ...mosaicBoxStyle, touchAction: 'none' }} onMouseDown={(e) => handleMosaicMouseDown(e, 'move')}>
              {/* Mosaic Edit UI */}
              <div className="w-full h-full border-2 border-pink-400 bg-pink-500/10 cursor-move relative shadow-sm rounded group">
                 <div className="absolute -left-1.5 -top-1.5 w-3 h-3 bg-white border border-pink-500 cursor-nw-resize z-40" onMouseDown={(e) => handleMosaicMouseDown(e, 'resize-tl')} />
@@ -1241,6 +1277,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
                 </>
             </div>
         )}
+        </div>
       </div>
     </div>
   );
