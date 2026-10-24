@@ -5,15 +5,43 @@ import {
     ASPECT_PRESETS,
     DEFAULT_GIF_OPTIONS,
     GIF_FPS_OPTIONS,
-    GIF_MAX_DURATION_S,
-    GIF_MAX_FILE_BYTES,
     GIF_MAX_LONGEST_SIDE,
+    GIF_WARN_FILE_BYTES,
     GIF_SIZE_OPTIONS,
     VideoExportFormat,
     VideoExportSettings,
-    evaluateGifLimits,
     formatBytes,
 } from '../utils/exportPresets';
+import { MACOS_APP_DOWNLOAD_URL, planGifExport, readDeviceBudget } from '../utils/gifPlan';
+
+/** Suggest the FrameCut macOS app when the browser can't do the requested GIF (URL is configurable). */
+export const MacAppSuggestion: React.FC<{ text: string; testId?: string }> = ({ text, testId }) => (
+    <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 p-3 space-y-1" data-testid={testId} role="note">
+        <p className="text-[11px] text-blue-100">{text}</p>
+        <p className="text-[11px] text-blue-100">
+            For longer or higher-quality GIFs, use the{' '}
+            <a href={MACOS_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" className="underline font-semibold" data-testid="macos-app-link">
+                FrameCut macOS app
+            </a>.
+        </p>
+    </div>
+);
+
+/** Shown after a GIF export stops at the browser's size/memory limits (or had to be trimmed). */
+export const GifWebLimitPrompt: React.FC<{ info: { reason: string; detail: string } | null; onClose: () => void }> = ({ info, onClose }) => {
+    if (!info) return null;
+    return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[85] flex items-center justify-center" onClick={onClose}>
+            <div role="dialog" aria-label="GIF browser limit" data-testid="gif-web-limit-prompt" className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-2xl space-y-3" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-semibold">{info.reason === 'trimmed' ? 'GIF was trimmed' : 'GIF too large for the browser'}</h3>
+                <MacAppSuggestion text={info.reason === 'trimmed' ? info.detail : `${info.detail}. Try a lower frame rate or smaller size.`} />
+                <div className="flex justify-end">
+                    <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800">Close</button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 interface ExportModalProps {
     isExporting: boolean;
@@ -58,12 +86,11 @@ const ExportSettings: React.FC<{
     useEffect(() => { setRatio(aspectRatio); }, [aspectRatio]);
     useEffect(() => { setFormat(initialFormat); }, [initialFormat]);
 
-    const limits = useMemo(
-        () => evaluateGifLimits(projectDuration, canvasSize.width || 1920, canvasSize.height || 1080, gif),
+    // PROVISIONAL adaptive plan: what the browser export will actually produce for these settings.
+    const plan = useMemo(
+        () => planGifExport(canvasSize.width || 1920, canvasSize.height || 1080, projectDuration, gif, readDeviceBudget()),
         [projectDuration, canvasSize.width, canvasSize.height, gif]
     );
-
-    const canExportGif = format !== 'gif' || limits.effectiveDuration <= GIF_MAX_DURATION_S;
 
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80] flex items-center justify-center" onClick={onCloseSettings}>
@@ -124,41 +151,35 @@ const ExportSettings: React.FC<{
                             Loop forever
                         </label>
 
-                        {(limits.needsTrim || limits.needsDownscale) && (
-                            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2" data-testid="gif-limit-warnings" role="alert">
-                                <div className="text-xs font-semibold text-amber-200">This clip exceeds GIF limits</div>
-                                {limits.needsTrim && (
-                                    <div className="space-y-1">
-                                        <p className="text-[11px] text-amber-100/90">
-                                            Length {limits.sourceDuration.toFixed(1)}s exceeds the {GIF_MAX_DURATION_S}s maximum.
-                                        </p>
-                                        <label className="flex items-center gap-2 text-xs text-zinc-200">
-                                            <input
-                                                type="checkbox"
-                                                aria-label={`Trim GIF to ${GIF_MAX_DURATION_S} seconds`}
-                                                checked={gif.trimToMaxDuration}
-                                                onChange={e => setGif({ ...gif, trimToMaxDuration: e.target.checked })}
-                                            />
-                                            Trim to first {GIF_MAX_DURATION_S}s
-                                        </label>
-                                    </div>
-                                )}
-                                {limits.needsDownscale && (
-                                    <p className="text-[11px] text-amber-100/90">
-                                        Source longest side is {limits.sourceLongestSide}px. Export will downscale to {limits.effectiveLongestSide}px (cap {GIF_MAX_LONGEST_SIDE}px).
-                                    </p>
-                                )}
+                        <div className="rounded-lg border border-white/10 bg-white/5 p-3 space-y-1" data-testid="gif-plan">
+                            <div className="text-[11px] text-zinc-300">
+                                Output {plan.width}×{plan.height}, {plan.fps} fps, {plan.colors} colours, {plan.duration.toFixed(1)}s ·
+                                estimated <span data-testid="gif-estimate">{formatBytes(plan.estimatedBytes)}</span>
                             </div>
+                            {plan.downgrades.length > 0 && (
+                                <p className="text-[11px] text-amber-200" data-testid="gif-downgrades">
+                                    Adjusted to fit the browser limit: {plan.downgrades.join(', ')}.
+                                </p>
+                            )}
+                            {plan.warnLarge && (
+                                <p className="text-[11px] text-amber-200" data-testid="gif-size-warning" role="alert">
+                                    Large GIF (over {formatBytes(GIF_WARN_FILE_BYTES)}): it may be slow to share or upload.
+                                </p>
+                            )}
+                        </div>
+
+                        {(plan.exceedsWebLimits || plan.downgrades.length >= 3) && (
+                            <MacAppSuggestion
+                                testId="gif-macos-suggestion"
+                                text={plan.exceedsWebLimits
+                                    ? `This project is too long for a browser GIF: only the first ${plan.duration}s will be exported.`
+                                    : 'Quality was reduced to fit what the browser can encode.'}
+                            />
                         )}
 
                         <p className="text-[10px] text-zinc-500">
-                            Encoded in your browser with gif.js. Limits: {GIF_MAX_DURATION_S}s, longest side ≤ {GIF_MAX_LONGEST_SIDE}px, file ≤ {formatBytes(GIF_MAX_FILE_BYTES)}. No audio.
+                            Encoded in your browser (gifenc). Longest side ≤ {GIF_MAX_LONGEST_SIDE}px, file ≤ {formatBytes(plan.hardCapBytes)} on this device. No audio.
                         </p>
-                        {!canExportGif && (
-                            <p className="text-[11px] text-red-400" data-testid="gif-trim-required">
-                                Enable “Trim to {GIF_MAX_DURATION_S}s” to continue, or shorten the project.
-                            </p>
-                        )}
                     </div>
                 )}
 
@@ -166,7 +187,7 @@ const ExportSettings: React.FC<{
                     <button onClick={onCloseSettings} className="px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
                     <button
                         data-testid="export-confirm"
-                        disabled={format === 'gif' && !canExportGif}
+                        disabled={false}
                         onClick={() => onConfirmExport({ format, aspectRatio: ratio, gif })}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                     >

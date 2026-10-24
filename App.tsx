@@ -7,7 +7,7 @@ import Toolbar from './components/Toolbar';
 import Sidebar from './components/Sidebar';
 import { DebugPanel } from './components/DebugPanel';
 import RecordingBar from './components/RecordingBar';
-import ExportModal from './components/ExportModal';
+import ExportModal, { GifWebLimitPrompt } from './components/ExportModal';
 import HeaderControls from './components/HeaderControls';
 import { formatTimecode, formatTimeShort } from './utils';
 import { useEditor } from './hooks/useEditor';
@@ -54,7 +54,7 @@ const App: React.FC = () => {
       handleTogglePiP 
   } = useScreenRecorder({ onRecordingComplete: handleLoadProject });
   
-  const { handleExportAction } = useExport({ state, setState, playerRef, currentTimeRef });
+  const { handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
 
   // Export settings dialog (aspect-ratio presets + MP4/WebM/GIF)
   const [exportSettingsFormat, setExportSettingsFormat] = useState<VideoExportFormat | null>(null);
@@ -467,6 +467,7 @@ const App: React.FC = () => {
         onCloseSettings={() => setExportSettingsFormat(null)}
         onConfirmExport={handleConfirmExport}
       />
+      <GifWebLimitPrompt info={gifWebLimit} onClose={dismissGifWebLimit} />
     </div>
   );
 };

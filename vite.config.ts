@@ -13,6 +13,10 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
       },
       plugins: [react()],
+      // gifenc is only imported from the GIF encoder worker; pre-bundle it so the dev server
+      // doesn't discover it lazily and force a full page reload mid-session.
+      optimizeDeps: { include: ['gifenc'] },
+      worker: { format: 'es' },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)

@@ -17,19 +17,15 @@ export const ASPECT_PRESETS: AspectPreset[] = [
 export const findAspectPreset = (ratio: number) =>
     ASPECT_PRESETS.find(p => Math.abs(p.value - ratio) < 0.01) ?? null;
 
-/** Product hard limits (Jingtian, #25 follow-up). */
-export const GIF_MAX_DURATION_S = 15;
-/** Longest side ≤ 1280 px ("720p" product limit). */
-export const GIF_MAX_LONGEST_SIDE = 1280;
-export const GIF_MAX_FILE_BYTES = 15 * 1024 * 1024;
+// GIF limits live in ./gifPlan (PROVISIONAL adaptive plan, gifenc). Re-exported for existing callers.
+import { GIF_MAX_LONGEST_SIDE, GIF_HARD_MAX_FILE_BYTES, GIF_WARN_FILE_BYTES, getGifSize } from './gifPlan';
+export { GIF_MAX_LONGEST_SIDE, GIF_HARD_MAX_FILE_BYTES, GIF_WARN_FILE_BYTES, getGifSize };
 
 export interface GifOptions {
     fps: number;
     /** Cap on the longer output side (px), clamped to GIF_MAX_LONGEST_SIDE. */
     maxLongestSide: number;
     loop: boolean;
-    /** When the project is longer than GIF_MAX_DURATION_S, export only the first N seconds. */
-    trimToMaxDuration: boolean;
 }
 
 export const GIF_FPS_OPTIONS = [10, 15] as const;
@@ -38,7 +34,6 @@ export const DEFAULT_GIF_OPTIONS: GifOptions = {
     fps: 10,
     maxLongestSide: 720,
     loop: true,
-    trimToMaxDuration: true,
 };
 
 export interface VideoExportSettings {
@@ -46,48 +41,6 @@ export interface VideoExportSettings {
     aspectRatio: number;
     gif: GifOptions;
 }
-
-export interface GifLimitWarnings {
-    needsTrim: boolean;
-    needsDownscale: boolean;
-    sourceDuration: number;
-    sourceLongestSide: number;
-    effectiveDuration: number;
-    effectiveLongestSide: number;
-}
-
-/** Even-sized output dims: scale so the longer side ≤ maxLongestSide (and never upscale). */
-export const getGifSize = (srcWidth: number, srcHeight: number, maxLongestSide: number) => {
-    const cap = Math.min(GIF_MAX_LONGEST_SIDE, Math.max(2, maxLongestSide));
-    const longest = Math.max(srcWidth, srcHeight);
-    const scale = Math.min(1, cap / longest);
-    const width = Math.max(2, Math.round((srcWidth * scale) / 2) * 2);
-    const height = Math.max(2, Math.round((srcHeight * scale) / 2) * 2);
-    return { width, height };
-};
-
-export const evaluateGifLimits = (
-    duration: number,
-    srcWidth: number,
-    srcHeight: number,
-    opts: GifOptions
-): GifLimitWarnings => {
-    const sourceLongestSide = Math.max(srcWidth, srcHeight);
-    const { width, height } = getGifSize(srcWidth, srcHeight, opts.maxLongestSide);
-    const needsTrim = duration > GIF_MAX_DURATION_S;
-    const needsDownscale = sourceLongestSide > GIF_MAX_LONGEST_SIDE
-        || Math.max(width, height) < sourceLongestSide;
-    const willTrim = needsTrim && opts.trimToMaxDuration;
-    return {
-        needsTrim,
-        needsDownscale,
-        sourceDuration: duration,
-        sourceLongestSide,
-        // When over length and the user has not accepted trim, keep the raw duration so the UI can block Export.
-        effectiveDuration: willTrim || !needsTrim ? Math.min(duration, GIF_MAX_DURATION_S) : duration,
-        effectiveLongestSide: Math.max(width, height),
-    };
-};
 
 export const formatBytes = (n: number) => {
     if (n < 1024) return `${n} B`;
