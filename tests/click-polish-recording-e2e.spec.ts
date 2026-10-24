@@ -194,3 +194,54 @@ test('6 recorded clicks (2 quick): ripple per click; Auto Spotlight groups the q
   const [off] = await sampleAtSourcePct(page, t5 + 0.1, [[c5.x, c5.y]]);
   expect(tint(on)).toBeGreaterThan(tint(off) + 25);
 });
+
+/** Preview canvas RGBA at source-% points mapped through the padded frame rect (CSS px of the preview canvas). */
+async function previewAtSourcePct(page: Page, pts: [number, number][]) {
+  return page.evaluate(async (pts) => {
+    const m = await import('/utils/backgroundFrame.ts');
+    const c = document.querySelector('canvas.w-full') as HTMLCanvasElement;
+    const f = (window as any).__FRAMECUT_E2E__.getSnapshot().backgroundFrame;
+    const r = m.isFrameActive(f) ? m.getFrameContentRect(c.width, c.height, f) : { x: 0, y: 0, width: c.width, height: c.height };
+    const ctx = c.getContext('2d')!;
+    return pts.map(([x, y]) => Array.from(ctx.getImageData(Math.round(r.x + x / 100 * r.width), Math.round(r.y + y / 100 * r.height), 1, 1).data));
+  }, pts);
+}
+
+test('on-screen PREVIEW canvas shows a ripple at each recorded click (paused seek), and not when toggled off', async ({ page }) => {
+  test.setTimeout(90000);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await mockDisplayMedia(page);
+  await page.goto('/');
+  await page.waitForFunction(() => !!(window as any).__FRAMECUT_E2E__);
+  await page.getByRole('button', { name: 'Start Recording' }).click();
+  await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 15000 });
+  const vp = page.viewportSize()!;
+  await page.waitForTimeout(700);
+  for (const [fx, fy] of [[0.35, 0.3], [0.65, 0.35], [0.5, 0.4]] as const) {
+    await page.mouse.move(vp.width * fx, vp.height * fy); await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(1300);
+  }
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__?.getSnapshot?.().hasMainVideo, null, { timeout: 20000 });
+  await page.evaluate(() => (window as any).__FRAMECUT_E2E__.removeAutoZooms());
+  await expect.poll(async () => (await snap(page)).zoomEffects.length).toBe(0);
+  const clicks = (await snap(page)).recordingEvents.filter((e: any) => e.type === 'click').slice(0, 3);
+  expect(clicks.length).toBe(3);
+
+  const previewTintAt = async (t: number, c: any) => {
+    await page.evaluate((t) => (window as any).__FRAMECUT_E2E__.seek(t), t);
+    await page.waitForTimeout(400);
+    return tint((await previewAtSourcePct(page, [[c.x, c.y]]))[0]);
+  };
+  for (const [i, c] of clicks.entries()) {
+    const during = await previewTintAt(c.time + 0.1, c);
+    if (i === 0 && process.env.FRAMECUT_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.FRAMECUT_EVIDENCE_DIR}/pr38-preview-ripple-click1.png` });
+    const after = await previewTintAt(c.time + 1.0, c);
+    expect(during, `preview ripple at click ${i + 1}`).toBeGreaterThan(after + 25);
+  }
+  await page.getByRole('button', { name: 'Toggle Click Ripples' }).click();
+  await expect.poll(async () => (await snap(page)).clickRipplesEnabled).toBe(false);
+  const off = await previewTintAt(clicks[0].time + 0.1 + 0.001, clicks[0]);
+  const on0 = await (async () => { await page.getByRole('button', { name: 'Toggle Click Ripples' }).click(); return previewTintAt(clicks[0].time + 0.1, clicks[0]); })();
+  expect(on0).toBeGreaterThan(off + 25);
+});

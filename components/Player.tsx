@@ -1052,6 +1052,19 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       containerSize.height
   ]);
 
+  // Paused preview: a seek (or first decode) finishes asynchronously, but renderFrame bails while the
+  // video is still seeking (readyState < 2). Redraw once the frame is actually available, otherwise the
+  // preview stays on a stale/black frame and newly drawn effects (e.g. brush blur) don't show (#26 QA).
+  useEffect(() => {
+      const videos = [introVideoRef.current, mainVideoRef.current, outroVideoRef.current].filter(Boolean) as HTMLVideoElement[];
+      const redraw = () => {
+          if (isPlayingRef.current || isExportingRef.current || internalPreviewTimeRef.current !== null) return;
+          renderFrame('preview');
+      };
+      videos.forEach(v => { v.addEventListener('seeked', redraw); v.addEventListener('loadeddata', redraw); });
+      return () => videos.forEach(v => { v.removeEventListener('seeked', redraw); v.removeEventListener('loadeddata', redraw); });
+  }, [introSrc, mainSrc, outroSrc]);
+
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
     const video = e.currentTarget;
     const isMain = video === mainVideoRef.current;
