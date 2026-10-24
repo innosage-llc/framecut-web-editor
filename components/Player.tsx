@@ -1000,7 +1000,11 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       renderFrame('export');
       return exportCanvasRef.current;
   };
-  const renderFrameNow = () => renderFrame(isExportingRef.current ? 'export' : 'preview');
+  const renderFrameNow = (mode?: 'preview' | 'export') => renderFrame(mode ?? (isExportingRef.current ? 'export' : 'preview'));
+  // isExportingRef is otherwise only updated in an effect after React commits `isExporting`; export
+  // loops start in the same tick, so they must flip it synchronously (GIF first-frame-only bug).
+  const beginExport = () => { isExportingRef.current = true; };
+  const endExport = () => { isExportingRef.current = isExporting; };
   const getCanvas = () => {
       if ((exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) && sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
           syncExportCanvasSize(sourceDimensionsRef.current.width, sourceDimensionsRef.current.height);
@@ -1015,7 +1019,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       encodeAudioAsM4a,
       prepareExportCanvas: lockExportCanvasSize,
       releaseExportCanvas: releaseExportCanvasSize,
-      renderExportFrameAt
+      renderExportFrameAt, beginExport, endExport
   }));
 
   useEffect(() => {
@@ -1033,7 +1037,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
       return () => {
           if (requestRef.current) cancelAnimationFrame(requestRef.current);
-          stopExportPlayback();
+          // Don't tear down export playback when isExporting commits *after* the export loop has
+          // already started (beginExport): that paused the export video and froze every GIF frame.
+          // useExport's finally{} stops export playback when the export ends.
+          if (!isExportingRef.current) stopExportPlayback();
       };
   }, [isPlaying, isExporting]);
 

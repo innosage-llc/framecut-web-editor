@@ -191,7 +191,11 @@ export interface PlayerRef {
   captureFrame: () => string | null;
   seekTo: (time: number) => Promise<void>;
   // New Methods for Offline Export
-  renderFrame: () => void;
+  renderFrame: (mode?: 'preview' | 'export') => void;
+  /** Mark the player as exporting synchronously (before React commits isExporting), so the
+   *  first export frame never runs preview-mode media sync (which pauses the export video). */
+  beginExport?: () => void;
+  endExport?: () => void;
   getCanvas: () => HTMLCanvasElement | null;
   startOfflineSession: (width: number, height: number, fps: number, audioBuffer: AudioBuffer | null) => Promise<{ width: number; height: number }>;
   addVideoFrame: (canvas: HTMLCanvasElement, timestampUs: number, isKeyFrame: boolean) => Promise<void>;
