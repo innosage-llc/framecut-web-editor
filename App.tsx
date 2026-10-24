@@ -36,7 +36,7 @@ const App: React.FC = () => {
   // Track mouse hover over the preview player to target Zoom effects
   const previewHoverRef = useRef<{x: number, y: number} | null>(null);
 
-  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef });
+  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef });
   const { videoCtx, audioCtx } = usePlaybackContext({ state });
   const { 
       isScreenRecording, 
@@ -136,6 +136,9 @@ const App: React.FC = () => {
           cursorPathLen: z.cursorPath?.length ?? 0,
           cursorPath: z.cursorPath ?? [],
         })),
+        spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height })),
+        mosaicEffects: state.mosaicEffects.map(m => ({ id: m.id, start: m.start, end: m.end })),
+        subtitles: state.subtitles.map(s => ({ id: s.id, start: s.start, end: s.end, text: s.text })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
         hasMainVideo: !!state.mainVideo,
@@ -145,9 +148,10 @@ const App: React.FC = () => {
       },
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
+      uploadMainAsset: (blob: Blob, name = 'replacement.webm') => handleUploadAsset('main', new File([blob], name, { type: blob.type || 'video/webm' })),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, handleUploadAsset, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
