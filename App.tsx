@@ -36,7 +36,7 @@ const App: React.FC = () => {
   // Track mouse hover over the preview player to target Zoom effects
   const previewHoverRef = useRef<{x: number, y: number} | null>(null);
 
-  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef });
+  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleAutoSpotlight, handleSetClickRipplesEnabled, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef });
   const { videoCtx, audioCtx } = usePlaybackContext({ state });
   const { 
       isScreenRecording, 
@@ -136,10 +136,12 @@ const App: React.FC = () => {
           cursorPathLen: z.cursorPath?.length ?? 0,
           cursorPath: z.cursorPath ?? [],
         })),
-        spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height })),
+        spotlightEffects: state.spotlightEffects.map(s => ({ id: s.id, start: s.start, end: s.end, x: s.x, y: s.y, width: s.width, height: s.height, auto: !!s.auto })),
+        clickRipplesEnabled: state.clickRipplesEnabled !== false,
+        backgroundFrame: state.backgroundFrame,
+        clips: state.clips.map(c => ({ id: c.id, mediaType: c.mediaType, offset: c.offset, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd, speed: c.speed })),
         mosaicEffects: state.mosaicEffects.map(m => ({ id: m.id, start: m.start, end: m.end, mode: m.mode, paths: m.paths, x: m.x, y: m.y, width: m.width, height: m.height })),
         subtitleTransforms: state.subtitles.map(s => ({ id: s.id, x: s.x, y: s.y, rotation: s.rotation, scale: s.scale })),
-        backgroundFrame: state.backgroundFrame,
         subtitles: state.subtitles.map(s => ({ id: s.id, start: s.start, end: s.end, text: s.text })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
@@ -151,7 +153,6 @@ const App: React.FC = () => {
       },
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
-      seek: (t: number) => handleSeek(t),
       setBackgroundFrame: (patch: any) => handleUpdateProjectSettings({ backgroundFrame: { ...stateRef.current.backgroundFrame, ...patch } } as any),
       /** Render one export-mode frame and sample RGBA at [x%, y%] points of the export canvas. */
       sampleExportFrame: async (t: number, points: [number, number][], width = 640, height = 360) => {
@@ -163,10 +164,21 @@ const App: React.FC = () => {
         p.releaseExportCanvas?.();
         return { width: c.width, height: c.height, pixels: out };
       },
+      /** Test seam: rebuild the main track as back-to-back clips covering the given source ranges (simulates trims). */
+      setMainSourceRanges: (ranges: [number, number][]) => setState(prev => {
+        const main = prev.clips.find(c => c.mediaType === 'main');
+        if (!main) return prev;
+        let offset = main.offset;
+        const mains = ranges.map(([a, b], i) => { const c = { ...main, id: `${main.id}-r${i}`, sourceStart: a, sourceEnd: b, offset }; offset += (b - a) / (main.speed || 1); return c; });
+        const clips = [...prev.clips.filter(c => c.mediaType !== 'main'), ...mains];
+        return { ...prev, clips, duration: recalculateDuration(clips, prev.audioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects) };
+      }),
+      seek: (t: number) => handleSeek(t),
       uploadMainAsset: (blob: Blob, name = 'replacement.webm') => handleUploadAsset('main', new File([blob], name, { type: blob.type || 'video/webm' })),
+      generateAutoSpotlight: () => handleAutoSpotlight(stateRef.current.recordingEvents),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.mosaicEffects, state.subtitles, state.autoZoomEnabled, handleUploadAsset, state.duration, state.currentTime, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, handleSeek, handleUpdateProjectSettings, state.backgroundFrame, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
@@ -294,6 +306,8 @@ const App: React.FC = () => {
                 zoomEffects={state.zoomEffects}
                 spotlightEffects={state.spotlightEffects}
                 mosaicEffects={state.mosaicEffects}
+                recordingEvents={state.recordingEvents}
+                clickRipplesEnabled={state.clickRipplesEnabled !== false}
                 
                 selectedZoomEffect={selectedZoomEffect || null}
                 selectedSpotlightEffect={selectedSpotlightEffect || null}
@@ -389,6 +403,9 @@ const App: React.FC = () => {
           autoZoomSensitivity={state.autoZoomSensitivity ?? 0.5}
           onAutoZoomSensitivity={handleSetAutoZoomSensitivity}
           hasRecordingEvents={state.recordingEvents.some(e => e.type === 'click')}
+          clickRipplesEnabled={state.clickRipplesEnabled !== false}
+          onToggleClickRipples={handleSetClickRipplesEnabled}
+          onAutoSpotlight={() => handleAutoSpotlight(state.recordingEvents)}
           onDelete={handleDelete}
           onDetachAudio={handleDetachAudio}
           onToggleDebug={handleToggleDebug}

@@ -1,11 +1,12 @@
 
 import React, { useRef, useEffect, useState, forwardRef, useImperativeHandle, memo } from 'react';
-import { Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, PlayerRef, Clip, ExtendedEditorState } from '../types';
+import { Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, PlayerRef, Clip, ExtendedEditorState, RecordingEvent } from '../types';
 import { RotateCcw, Check, Crosshair } from 'lucide-react';
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
 import { useCanvasRecorder } from '../hooks/useCanvasRecorder';
 import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, calculateZoomRect } from '../utils/canvasRenderer';
 import PropertyHUD from './PropertyHUD';
+import { getActiveClickRipples, renderClickRipples } from '../utils/clickPolish';
 import { BackgroundFrame, isFrameActive, getFrameContentRect, drawWallpaper, drawFramedContent } from '../utils/backgroundFrame';
 
 type TimedItem = { start: number; end: number };
@@ -130,6 +131,9 @@ interface PlayerProps {
   aspectRatio: number;
   canvasBackgroundColor: string;
   backgroundFrame?: BackgroundFrame;
+  /** #23: in-tab click metadata for click ripples (main clip only). */
+  recordingEvents?: RecordingEvent[];
+  clickRipplesEnabled?: boolean;
   projectName: string | null;
   onUpdateProjectSettings: (updates: Partial<ExtendedEditorState>) => void;
   onMosaicBrushSizeChange: (size: number) => void;
@@ -184,6 +188,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   aspectRatio,
   canvasBackgroundColor,
   backgroundFrame,
+  recordingEvents,
+  clickRipplesEnabled = true,
   projectName,
   onUpdateProjectSettings,
   onMosaicBrushSizeChange
@@ -238,6 +244,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   
   const canvasBackgroundColorRef = useRef(canvasBackgroundColor);
   const backgroundFrameRef = useRef(backgroundFrame);
+  const recordingEventsRef = useRef(recordingEvents);
+  recordingEventsRef.current = recordingEvents;
+  const clickRipplesEnabledRef = useRef(clickRipplesEnabled);
+  clickRipplesEnabledRef.current = clickRipplesEnabled;
   const frameContentCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const wallpaperImageRef = useRef<HTMLImageElement | null>(null);
   const playbackRateRef = useRef(playbackRate);
@@ -660,7 +670,14 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           }
           const onSeeked = () => {
               video!.removeEventListener('seeked', onSeeked);
-              resolve();
+              // 'seeked' can fire before the paused element has a presentable frame; drawing it right
+              // away (export / frame capture) may yield a blank frame. Wait for the frame callback.
+              const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+              if (typeof v.requestVideoFrameCallback !== 'function') { resolve(); return; }
+              let settled = false;
+              const finish = () => { if (!settled) { settled = true; resolve(); } };
+              v.requestVideoFrameCallback(finish);
+              window.setTimeout(finish, 250);
           };
           video!.addEventListener('seeked', onSeeked, { once: true });
           video!.currentTime = sourceTime;
@@ -933,6 +950,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
                 if (mosaic) renderMosaic(ctx, video, mosaic, pixelCanvasRef.current, maskCanvasRef.current, cw, ch, cropInfo, playing);
                 if (spotlight) renderSpotlight(ctx, spotlight, cw, ch, selectedSpotlight, playing, currentGlobalTime, cropInfo);
             }
+            // #23: additive click ripples from in-tab click metadata (OS cursor stays baked in).
+            if (activeMediaType === 'main' && clickRipplesEnabledRef.current !== false && !editingCrop) {
+                renderClickRipples(ctx, getActiveClickRipples(recordingEventsRef.current, currentSourceTime), cw, ch, cropInfo);
+            }
         }
     }
 
@@ -1047,7 +1068,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useEffect(() => {
       const videos = [introVideoRef.current, mainVideoRef.current, outroVideoRef.current].filter(Boolean) as HTMLVideoElement[];
       const redraw = () => {
-          if (isPlayingRef.current || isExportingRef.current || internalPreviewTimeRef.current !== null) return;
+          // Skip while an export/sample render owns the video element (export canvas locked): a preview
+          // redraw would run syncMediaState and re-seek the shared <video> under the export frame.
+          if (isPlayingRef.current || isExportingRef.current || exportCanvasLockRef.current || internalPreviewTimeRef.current !== null) return;
           renderFrame('preview');
       };
       videos.forEach(v => { v.addEventListener('seeked', redraw); v.addEventListener('loadeddata', redraw); });

@@ -87,6 +87,8 @@ export interface SpotlightEffect {
   height: number;
   intensity?: number;
   shape?: 'circle' | 'rectangle';
+  /** Generated from in-tab clicks (#23). Regenerating replaces only auto spotlights. */
+  auto?: boolean;
 }
 
 export interface MosaicPath {
@@ -165,6 +167,8 @@ export interface EditorState {
   autoZoomEnabled: boolean;
   /** 0–1 sensitivity for grouping nearby clicks when auto-generating zooms. */
   autoZoomSensitivity: number;
+  /** #23: draw click ripples/highlights from in-tab click metadata (preview + export). */
+  clickRipplesEnabled?: boolean;
 
   // Export Settings
   coverImage: string | null; // Base64 or Blob URL for the video thumbnail/poster
