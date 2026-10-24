@@ -16,6 +16,8 @@ interface UseCanvasInteractionProps {
     isPlaying: boolean;
     currentTimeRef: React.MutableRefObject<number>;
     contentRef: RefObject<HTMLDivElement>;
+    /** Optional layer matching the drawn content rect (Background Frame padding). Falls back to contentRef. */
+    overlayRef?: RefObject<HTMLDivElement>;
     currentBrushSize: number;
     onUpdateSubtitle: (sub: Subtitle) => void;
     onUpdateZoomEffect: (zoom: ZoomEffect) => void;
@@ -40,7 +42,8 @@ export const useCanvasInteraction = ({
     selectedMosaicEffect,
     isPlaying,
     currentTimeRef,
-    contentRef,
+    contentRef: rootContentRef,
+    overlayRef,
     currentBrushSize,
     onUpdateSubtitle,
     onUpdateZoomEffect,
@@ -52,6 +55,8 @@ export const useCanvasInteraction = ({
     onUpdateClip,
     activeClipsRef
 }: UseCanvasInteractionProps) => {
+    // Map pointer coords through the same rect the effects are drawn in (#26).
+    const contentRef = { get current() { return overlayRef?.current ?? rootContentRef.current; } } as RefObject<HTMLDivElement>;
     
     const draggedItemIdRef = useRef<string | null>(null);
 

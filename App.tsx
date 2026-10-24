@@ -36,7 +36,7 @@ const App: React.FC = () => {
   // Track mouse hover over the preview player to target Zoom effects
   const previewHoverRef = useRef<{x: number, y: number} | null>(null);
 
-  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleAutoSpotlight, handleSetClickRipplesEnabled, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef });
+  const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleAutoSpotlight, handleSetClickRipplesEnabled, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef });
   const { videoCtx, audioCtx } = usePlaybackContext({ state });
   const { 
       isScreenRecording, 
@@ -140,8 +140,12 @@ const App: React.FC = () => {
         clickRipplesEnabled: state.clickRipplesEnabled !== false,
         backgroundFrame: state.backgroundFrame,
         clips: state.clips.map(c => ({ id: c.id, mediaType: c.mediaType, offset: c.offset, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd, speed: c.speed })),
+        mosaicEffects: state.mosaicEffects.map(m => ({ id: m.id, start: m.start, end: m.end, mode: m.mode, paths: m.paths, x: m.x, y: m.y, width: m.width, height: m.height })),
+        subtitleTransforms: state.subtitles.map(s => ({ id: s.id, x: s.x, y: s.y, rotation: s.rotation, scale: s.scale })),
+        subtitles: state.subtitles.map(s => ({ id: s.id, start: s.start, end: s.end, text: s.text })),
         autoZoomEnabled: state.autoZoomEnabled !== false,
         duration: state.duration,
+        currentTime: state.currentTime,
         hasMainVideo: !!state.mainVideo,
       }),
       loadWithEvents: async (blob: Blob, events: RecordingEvent[], durationHint?: number) => {
@@ -149,6 +153,7 @@ const App: React.FC = () => {
       },
       generateAutoZoom: () => handleAutoZoom(stateRef.current.recordingEvents),
       removeAutoZooms: () => handleRemoveAutoZooms(),
+      setBackgroundFrame: (patch: any) => handleUpdateProjectSettings({ backgroundFrame: { ...stateRef.current.backgroundFrame, ...patch } } as any),
       /** Render one export-mode frame and sample RGBA at [x%, y%] points of the export canvas. */
       sampleExportFrame: async (t: number, points: [number, number][], width = 640, height = 360) => {
         const p = playerRef.current;
@@ -169,10 +174,11 @@ const App: React.FC = () => {
         return { ...prev, clips, duration: recalculateDuration(clips, prev.audioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects) };
       }),
       seek: (t: number) => handleSeek(t),
+      uploadMainAsset: (blob: Blob, name = 'replacement.webm') => handleUploadAsset('main', new File([blob], name, { type: blob.type || 'video/webm' })),
       generateAutoSpotlight: () => handleAutoSpotlight(stateRef.current.recordingEvents),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, stateRef]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
