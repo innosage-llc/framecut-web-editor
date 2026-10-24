@@ -217,7 +217,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const sourceDimensionsRef = useRef({ width: 0, height: 0 });
   const exportCanvasLockRef = useRef<{ width: number; height: number } | null>(null);
   const exportPlaybackVideoRef = useRef<HTMLVideoElement | null>(null);
-  const exportPlaybackModeRef = useRef<'playback' | 'seek' | null>(null);
+  const exportPlaybackModeRef = useRef<'playback' | 'seek' | 'frame' | null>(null);
   
   // Refs for Props (To avoid stale closures in RAF)
   const srcRef = useRef(src);
@@ -684,7 +684,38 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       });
   };
 
-  const prepareExportPlayback = async (clip: Clip | null): Promise<'video' | 'static' | 'empty'> => {
+  /**
+   * Frame-accurate seek for non-realtime export (GIF): seek the paused element and wait until the
+   * frame for `targetTime` has actually been presented (requestVideoFrameCallback mediaTime), so the
+   * next drawImage can't grab the previously presented frame. Falls back to a timeout where rVFC
+   * doesn't fire (e.g. some headless/offscreen cases).
+   */
+  const seekToPresentedFrame = (video: HTMLVideoElement, targetTime: number, timeoutMs = 500) => new Promise<void>((resolve) => {
+      if (!video.paused) video.pause();
+      const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number };
+      let settled = false;
+      let timer: number | null = null;
+      const finish = () => {
+          if (settled) return;
+          settled = true;
+          if (timer !== null) window.clearTimeout(timer);
+          resolve();
+      };
+      const waitPresented = () => {
+          if (typeof v.requestVideoFrameCallback !== 'function') { finish(); return; }
+          timer = window.setTimeout(finish, timeoutMs);
+          v.requestVideoFrameCallback(finish);
+      };
+      if (Math.abs(video.currentTime - targetTime) < 1e-4 && !video.seeking && video.readyState >= 2) {
+          // Already showing this frame (e.g. first frame after prepare).
+          finish();
+          return;
+      }
+      video.addEventListener('seeked', waitPresented, { once: true });
+      video.currentTime = targetTime;
+  });
+
+  const prepareExportPlayback = async (clip: Clip | null, opts: { frameAccurate?: boolean } = {}): Promise<'video' | 'static' | 'empty'> => {
       pauseAllExportVideos();
       exportPlaybackVideoRef.current = null;
       exportPlaybackModeRef.current = null;
@@ -703,16 +734,25 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       await waitForMediaReady(video, 1);
       await waitForSeek(video, clip.sourceStart);
 
-      let mode: 'playback' | 'seek' = 'seek';
+      let mode: 'playback' | 'seek' | 'frame' = 'seek';
       video.muted = true;
       video.playbackRate = clip.speed;
 
-      try {
-          await waitForMediaReady(video, 2);
-          await video.play();
-          mode = 'playback';
-      } catch {
+      if (opts.frameAccurate) {
+          // Non-realtime export (GIF): never free-run playback. During playback currentTime can pass
+          // the target before the matching frame is presented, so a capture right then re-draws the
+          // previous frame (duplicate consecutive GIF frames). Seek + await the presented frame instead.
           video.pause();
+          await waitForMediaReady(video, 2);
+          mode = 'frame';
+      } else {
+          try {
+              await waitForMediaReady(video, 2);
+              await video.play();
+              mode = 'playback';
+          } catch {
+              video.pause();
+          }
       }
 
       exportPlaybackVideoRef.current = video;
@@ -726,6 +766,11 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       const mode = exportPlaybackModeRef.current;
 
       if (!video || !mode) return;
+
+      if (mode === 'frame') {
+          await seekToPresentedFrame(video, sourceTime);
+          return;
+      }
 
       if (mode === 'seek') {
           await waitForSeek(video, sourceTime);

@@ -43,7 +43,7 @@ const decodeGif = (page: Page, bytes: Buffer) => page.evaluate(async (b64) => {
     ctx.drawImage(image, 0, 0); image.close();
     const d = ctx.getImageData(0, 0, w, h).data;
     let hash = 0;
-    for (let k = 0; k < d.length; k += 61) hash = (hash * 31 + d[k]) | 0;
+    for (let k = 0; k < d.length; k += 1) hash = (hash * 31 + d[k]) | 0;
     hashes.push(hash);
   }
   return { count, w, h, hashes };
@@ -63,8 +63,11 @@ test('GIF export contains ~fps*duration mostly distinct frames at the export siz
 
   expect(gif.count).toBe(100); // 10s @ 10fps
   expect([gif.w, gif.h]).toEqual([480, 270]); // getGifSize(640, 360, 480) — was the preview canvas size
-  const distinct = new Set(gif.hashes).size;
-  expect(distinct).toBeGreaterThanOrEqual(80); // was 1 (every frame identical)
+  // The 10fps sample of the 30fps test pattern changes every frame: every GIF frame must be distinct
+  // and no two consecutive frames may repeat (main: 1 distinct; free-running playback sync: ~10 repeats).
+  const repeats = gif.hashes.filter((h, i) => i > 0 && h === gif.hashes[i - 1]).length;
+  expect(repeats).toBe(0);
+  expect(new Set(gif.hashes).size).toBe(100);
   expect(gif.hashes[0]).not.toBe(gif.hashes[50]);
   await expect(page.getByText('Exporting...')).toBeHidden();
 });

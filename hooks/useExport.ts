@@ -88,7 +88,8 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const time = Math.min(duration, i / fps);
             const activeClip = findActiveClipAtTime(sortedClips, time, clipCursor);
             if (i === 0 || activeClip?.id !== activeClipId) {
-                activeClipMode = await player.prepareExportPlayback(activeClip);
+                // GIF export isn't realtime: seek frame-accurately instead of free-running playback.
+                activeClipMode = await player.prepareExportPlayback(activeClip, { frameAccurate: true });
                 activeClipId = activeClip?.id ?? null;
             }
             currentTimeRef.current = time;
