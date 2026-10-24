@@ -62,6 +62,7 @@ test('preview shows the video after a paused seek and brush blur strokes render 
   await expect.poll(async () => (await E2E(page)).mosaicEffects[0].paths.length).toBeGreaterThan(0);
   await page.waitForTimeout(300);
   const after = await previewPixels(page, SAMPLE);
+  if (process.env.FRAMECUT_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.FRAMECUT_EVIDENCE_DIR}/pr36-preview-brush-${test.info().title.startsWith('UI') ? 'ui-flow' : 'seek'}.png` });
   // Under the stroke the preview pixels change (blurred); far corner unchanged.
   expect(Math.max(diff(before[0], after[0]), diff(before[1], after[1]))).toBeGreaterThan(30);
   expect(diff(before[2], after[2])).toBeLessThan(20);
@@ -108,6 +109,7 @@ test('UI flow: click timeline ruler, move over preview, brush blur renders on th
   await expect.poll(async () => (await E2E(page)).mosaicEffects[0].paths.length).toBeGreaterThan(0);
   await page.waitForTimeout(300);
   const after = await previewPixels(page, SAMPLE);
+  if (process.env.FRAMECUT_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.FRAMECUT_EVIDENCE_DIR}/pr36-preview-brush-${test.info().title.startsWith('UI') ? 'ui-flow' : 'seek'}.png` });
   // Under the stroke the preview pixels change (blurred); far corner unchanged.
   expect(Math.max(diff(before[0], after[0]), diff(before[1], after[1]))).toBeGreaterThan(30);
   expect(diff(before[2], after[2])).toBeLessThan(20);
