@@ -115,6 +115,12 @@ const Toolbar: React.FC<ToolbarProps> = ({
                         <Focus size={14} />
                     </button>
                 )}
+                <span
+                    data-testid="click-polish-limit"
+                    className="hidden md:inline text-[10px] leading-tight text-zinc-500 select-none ml-1 whitespace-nowrap"
+                >
+                    Click polish: in-tab clicks only
+                </span>
             </div>
         )}
 
