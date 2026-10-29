@@ -10,6 +10,7 @@ interface Props {
   unavailableReason?: string;
   status: SubtitleToolStatus;
   onGenerate: () => void;
+  onConfirmDownload: () => void;
   onCancel: () => void;
   onImport: (file: File) => void;
   onExport: (format: 'srt' | 'vtt') => void;
@@ -17,14 +18,14 @@ interface Props {
 }
 
 /** #27 subtitle tools: Generate (swappable transcriber), SRT/VTT import + export, status. */
-const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, unavailableReason, status, onGenerate, onCancel, onImport, onExport, onDismiss }) => {
+const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, unavailableReason, status, onGenerate, onConfirmDownload, onCancel, onImport, onExport, onDismiss }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const running = status.kind === 'running';
   const btn = 'p-1.5 rounded-md text-zinc-400 hover:text-sky-400 hover:bg-sky-900/30 disabled:opacity-30 transition-colors';
   return (
     <div className="flex items-center gap-0.5 pl-1 border-l border-zinc-800 ml-0.5 relative">
       <button
-        onClick={onGenerate}
+        onClick={() => onGenerate()}
         className={btn}
         disabled={!hasVideo || running}
         aria-label="Generate subtitles"
@@ -60,14 +61,22 @@ const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, una
         >
           <div className="flex items-start gap-2">
             <div className="flex-1">
-              {status.kind === 'running' ? 'Generating subtitles…' : status.message}
-              {status.kind === 'unavailable' && (
+              {status.message}
+              {status.kind === 'confirm-download' && (
+                <div className="mt-2 flex gap-2">
+                  <button onClick={onConfirmDownload} className="px-2 py-1 rounded bg-sky-600 text-white font-semibold" aria-label="Download model and generate subtitles">
+                    Download {status.approxMB} MB &amp; generate
+                  </button>
+                  <button onClick={onDismiss} className="px-2 py-1 rounded bg-zinc-800" aria-label="Not now">Not now</button>
+                </div>
+              )}
+              {(status.kind === 'unavailable' || status.kind === 'over-limit') && (
                 <a href={MACOS_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" className="block mt-1 underline font-semibold" data-testid="subtitle-macos-app-link">
                   Get the FrameCut macOS app
                 </a>
               )}
             </div>
-            {status.kind === 'running'
+            {status.kind === 'confirm-download' ? null : status.kind === 'running'
               ? <button onClick={onCancel} className="underline" aria-label="Cancel subtitle generation">Cancel</button>
               : <button onClick={onDismiss} aria-label="Dismiss subtitle message"><X size={12} /></button>}
           </div>

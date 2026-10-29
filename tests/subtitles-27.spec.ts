@@ -7,10 +7,15 @@ import { test, expect, Page } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isSilent, cleanWhisperSegments } from '../utils/whisperTranscriber';
+import { mapSourceSegmentsToTimeline } from '../utils/subtitleGeneration';
 import { parseSrt, parseVtt, toSrt, toVtt, parseSubtitleFile, formatCueTime, parseCueTime } from '../utils/subtitleFormats';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.join(__dirname, 'fixtures', 'e2e-black-60s.webm');
+const FIXTURE = path.join(__dirname, 'fixtures', 'e2e-black-60s.webm'); // video only, no audio track
+const FIXTURE_SILENT = path.join(__dirname, 'fixtures', 'e2e-silent-audio-5s.webm'); // silent opus track
+const FIXTURE_LONG = path.join(__dirname, 'fixtures', 'e2e-black-11min.webm'); // 660 s, over the 10-min web limit
+let workers: string[] = [];
 
 let unexpected: string[] = [];
 
@@ -27,7 +32,8 @@ async function guardNetwork(page: Page, baseURL: string) {
   const ok = (u: string) => u.startsWith(origin) || u.startsWith('blob:') || u.startsWith('data:')
     || (u.startsWith('https://') && SHELL_HOSTS.has(new URL(u).hostname));
   page.on('request', r => { if (!ok(r.url())) unexpected.push(r.url()); });
-  page.on('worker', w => { if (!ok(w.url())) unexpected.push(`worker:${w.url()}`); });
+  workers = [];
+  page.on('worker', w => { workers.push(w.url()); if (!ok(w.url())) unexpected.push(`worker:${w.url()}`); });
   await page.context().route('**/*', route => {
     const u = route.request().url();
     if (ok(u)) return route.continue();
@@ -38,7 +44,7 @@ async function guardNetwork(page: Page, baseURL: string) {
 
 const MODELISH = /\.(onnx|bin|gguf|ggml|tflite|safetensors)(\?|$)|huggingface|whisper|transformers/i;
 
-async function setup(page: Page, baseURL: string) {
+async function setup(page: Page, baseURL: string, fixture = FIXTURE, durationHint = 60) {
   await guardNetwork(page, baseURL);
   await page.addInitScript(() => {
     (window as any).__FRAMECUT_E2E_ENABLED__ = true;
@@ -46,12 +52,12 @@ async function setup(page: Page, baseURL: string) {
   });
   await page.goto('/');
   await page.waitForFunction(() => !!(window as any).__FRAMECUT_E2E__);
-  const b64 = fs.readFileSync(FIXTURE).toString('base64');
-  await page.evaluate(async (b64) => {
+  const b64 = fs.readFileSync(fixture).toString('base64');
+  await page.evaluate(async ({ b64, durationHint }) => {
     const bin = atob(b64); const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    await (window as any).__FRAMECUT_E2E__.loadWithEvents(new Blob([bytes], { type: 'video/webm' }), [], 60);
-  }, b64);
+    await (window as any).__FRAMECUT_E2E__.loadWithEvents(new Blob([bytes], { type: 'video/webm' }), [], durationHint);
+  }, { b64, durationHint });
   await page.waitForFunction(() => { const s = (window as any).__FRAMECUT_E2E__?.getSnapshot?.(); return s && s.hasMainVideo && s.duration > 0; }, null, { timeout: 20000 });
 }
 
@@ -101,19 +107,115 @@ test.describe('#27 SRT/VTT formats (pure)', () => {
   });
 });
 
+async function injectWhisperWithCountingWorker(page: Page) {
+  await page.evaluate(() => {
+    const w = window as any; w.__workerRuns = 0;
+    const E = w.__FRAMECUT_E2E__;
+    // Real audio decoding + silence detection; the worker must never be reached.
+    E.setTranscriber(E.createWhisperTranscriber({
+      makeWorker: () => { w.__workerRuns++; return new Worker(URL.createObjectURL(new Blob(['self.onmessage=(e)=>self.postMessage({type:"result",id:e.data.id,segments:[{start:0,end:1,text:"hallucination"}]})'], { type: 'text/javascript' }))); },
+      isReady: async () => true,
+    }));
+  });
+}
+
+test.describe('#27 no audio / silence / over limit', () => {
+  test('video with NO audio track → "No speech found", nothing generated, engine never run', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await injectWhisperWithCountingWorker(page);
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'empty');
+    await expect(status(page)).toContainText('No speech found');
+    expect(await subs(page)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__workerRuns)).toBe(0);
+    await expect(generateBtn(page)).toBeEnabled();
+  });
+
+  test('video with a SILENT audio track → "No speech found", engine never run', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE_SILENT, 5);
+    await injectWhisperWithCountingWorker(page);
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'empty');
+    expect(await subs(page)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__workerRuns)).toBe(0);
+  });
+
+  test('over the 10-minute web limit → macOS app suggestion, no prompt, nothing generated', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE_LONG, 660);
+    expect(await page.evaluate(() => (window as any).__FRAMECUT_E2E__.getSnapshot().duration)).toBeGreaterThan(600);
+    await generateBtn(page).click(); // real default engine
+    await expect(status(page)).toHaveAttribute('data-kind', 'over-limit');
+    await expect(status(page)).toContainText('up to 10 minutes');
+    await expect(page.getByTestId('subtitle-macos-app-link')).toHaveAttribute('href', '/download/mac');
+    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(await subs(page)).toEqual([]);
+    expect(workers.filter(u => /whisper/i.test(u))).toEqual([]);
+  });
+});
+
+test.describe('#27 transcription helpers (pure)', () => {
+  test('silence detection, non-speech markers, source→timeline mapping through trims', () => {
+    expect(isSilent(new Float32Array(16000))).toBe(true);
+    const loud = new Float32Array(16000); loud[8000] = 0.9; loud.fill(0.2, 4000, 5000);
+    expect(isSilent(loud)).toBe(false);
+    expect(cleanWhisperSegments([{ start: 0, end: 1, text: ' [BLANK_AUDIO] ' }, { start: 1, end: 2, text: '(music) Hi  there' }])).toEqual([{ start: 1, end: 2, text: 'Hi there' }]);
+    const clips: any[] = [
+      { id: 'a', mediaType: 'main', offset: 0, sourceStart: 0, sourceEnd: 10, speed: 1 },
+      { id: 'b', mediaType: 'main', offset: 10, sourceStart: 20, sourceEnd: 30, speed: 2 },
+    ];
+    expect(mapSourceSegmentsToTimeline([{ start: 2, end: 4, text: 'kept' }, { start: 12, end: 15, text: 'cut' }, { start: 22, end: 26, text: 'fast' }], clips))
+      .toEqual([{ start: 2, end: 4, text: 'kept' }, { start: 11, end: 13, text: 'fast' }]);
+  });
+});
+
 test.describe('#27 subtitle tools in the editor', () => {
   test.beforeEach(async ({ page, baseURL }) => { await setup(page, baseURL!); });
 
-  test('default build: generate is unavailable with clear copy, macOS link, no network/model', async ({ page }) => {
-    await expect(generateBtn(page)).toHaveAttribute('data-available', 'false');
+  test('default engine: opt-in size warning before ANY download; "Not now" downloads nothing', async ({ page }) => {
+    await expect(generateBtn(page)).toHaveAttribute('data-available', 'true');
     await generateBtn(page).click();
-    await expect(status(page)).toHaveAttribute('data-kind', 'unavailable');
-    await expect(status(page)).toContainText("Automatic subtitles aren't available in the web editor yet");
-    await expect(page.getByTestId('subtitle-macos-app-link')).toHaveAttribute('href', '/download/mac');
-    expect(await subs(page)).toEqual([]);
-    await expect(generateBtn(page)).toBeEnabled();
+    await expect(status(page)).toHaveAttribute('data-kind', 'confirm-download');
+    await expect(status(page)).toContainText(/speech model \(about \d+ MB\)/);
+    await expect(status(page)).toContainText('cached in your browser');
+    await expect(status(page)).toContainText('English is officially supported');
+    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toBeVisible();
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(status(page)).toHaveCount(0);
     await page.waitForTimeout(500);
+    expect(await subs(page)).toEqual([]);
+    expect(workers.filter(u => /whisper/i.test(u))).toEqual([]);
     expect(unexpected.filter(u => MODELISH.test(u))).toEqual([]);
+  });
+
+  test('opt-in flow (mocked model): confirm → download progress → cues; cached model is not prompted again', async ({ page }) => {
+    await page.evaluate(() => {
+      const w = window as any; w.__cached = false; w.__workerRuns = 0;
+      const src = `self.onmessage = (e) => { const m = e.data; if (m.type !== 'transcribe') return;
+        self.postMessage({ type: 'progress', id: m.id, phase: 'download', progress: 0.5 });
+        self.postMessage({ type: 'progress', id: m.id, phase: 'transcribe', progress: 0 });
+        setTimeout(() => self.postMessage({ type: 'result', id: m.id, segments: [
+          { start: 1, end: 3, text: ' Hello there. ' }, { start: 3, end: 4, text: '[BLANK_AUDIO]' }, { start: 5, end: 7, text: 'pcm=' + m.request.audio.length } ] }), 300); };`;
+      const E = w.__FRAMECUT_E2E__;
+      E.setTranscriber(E.createWhisperTranscriber({
+        makeWorker: () => { w.__workerRuns++; return new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))); },
+        isReady: async () => w.__cached,
+        decodeAudio: async () => { const a = new Float32Array(16000); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i / 5) * 0.3; return a; },
+      }));
+    });
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'confirm-download');
+    expect(await page.evaluate(() => (window as any).__workerRuns)).toBe(0); // nothing before consent
+    await page.getByRole('button', { name: 'Download model and generate subtitles' }).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    await expect(status(page)).toContainText('English is officially supported');
+    expect((await subs(page)).map(x => [x.start, x.end, x.text])).toEqual([[1, 3, 'Hello there.'], [5, 7, 'pcm=16000']]);
+
+    await page.evaluate(() => { (window as any).__cached = true; });
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'running'); // no prompt once cached
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    expect(await page.evaluate(() => (window as any).__workerRuns)).toBe(2);
   });
 
   test('generate with mock: auto cues; regenerate replaces only auto; edited + manual kept; undo works', async ({ page }) => {

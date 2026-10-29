@@ -19,7 +19,11 @@ import { useExport } from './hooks/useExport';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSubtitleTools } from './hooks/useSubtitleTools';
 import SubtitleTools from './components/SubtitleTools';
-import { setTranscriber, createWorkerTranscriber, createStubWorker } from './utils/transcriber';
+import { setTranscriber, createWorkerTranscriber, createStubWorker, installDefaultTranscriber } from './utils/transcriber';
+import { createWhisperTranscriber } from './utils/whisperTranscriber';
+
+// #27: on-device Whisper is the default engine (opt-in download on first use).
+installDefaultTranscriber(createWhisperTranscriber());
 import { VideoExportFormat, VideoExportSettings } from './utils/exportPresets';
 import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip, RecordingEvent } from './types';
 
@@ -185,6 +189,7 @@ const App: React.FC = () => {
       setTranscriber,
       createWorkerTranscriber,
       createStubWorker,
+      createWhisperTranscriber,
       setSubtitleGenerationTimeoutMs: (ms: number) => subtitleTools.setTimeoutMs(ms),
       updateSubtitle: (id: string, patch: Partial<Subtitle>) => {
         const sub = stateRef.current.subtitles.find(x => x.id === id);
@@ -434,7 +439,8 @@ const App: React.FC = () => {
               available={subtitleTools.availability.available}
               unavailableReason={'reason' in subtitleTools.availability ? subtitleTools.availability.reason : undefined}
               status={subtitleTools.status}
-              onGenerate={subtitleTools.generate}
+              onGenerate={() => subtitleTools.generate()}
+              onConfirmDownload={() => subtitleTools.generate({ confirmed: true })}
               onCancel={subtitleTools.cancel}
               onImport={subtitleTools.importFile}
               onExport={subtitleTools.exportFile}

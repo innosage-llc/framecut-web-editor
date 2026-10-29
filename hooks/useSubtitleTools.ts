@@ -2,13 +2,17 @@ import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExtendedEditorState, Subtitle } from '../types';
 import { getTranscriber, subscribeTranscriber } from '../utils/transcriber';
-import { replaceAutoSubtitles, segmentsToCues, cueToSubtitle } from '../utils/subtitleGeneration';
+import { replaceAutoSubtitles, segmentsToCues, cueToSubtitle, mapSourceSegmentsToTimeline } from '../utils/subtitleGeneration';
+import { WEB_TRANSCRIBE_LIMIT_SECONDS } from '../utils/whisperTranscriber';
 import { parseSubtitleFile, toSrt, toVtt } from '../utils/subtitleFormats';
 
 export type SubtitleToolStatus =
   | { kind: 'idle' }
-  | { kind: 'running' }
-  | { kind: 'done' | 'imported' | 'empty' | 'error' | 'unavailable' | 'exported'; message: string };
+  | { kind: 'running'; message: string }
+  | { kind: 'confirm-download'; message: string; approxMB: number }
+  | { kind: 'done' | 'imported' | 'empty' | 'error' | 'unavailable' | 'exported' | 'over-limit'; message: string };
+
+export const LANGUAGE_COPY = 'Language is detected automatically. English is officially supported; other languages are best-effort.';
 
 export const GENERATION_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -36,35 +40,50 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
 
   const availability = getTranscriber().availability();
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (opts: { confirmed?: boolean } = {}) => {
     if (abortRef.current) return; // already running
     const transcriber = getTranscriber();
-    const avail = transcriber.availability();
-    if ('reason' in avail) { setStatus({ kind: 'unavailable', message: avail.reason }); return; }
     const s = stateRef.current;
     if (!s.mainVideo) { setStatus({ kind: 'error', message: 'Add a video before generating subtitles.' }); return; }
+    const mediaDuration = s.mainVideo.duration || s.duration;
+    if (mediaDuration > WEB_TRANSCRIBE_LIMIT_SECONDS) {
+      setStatus({ kind: 'over-limit', message: `Automatic subtitles in the web editor support videos up to ${WEB_TRANSCRIBE_LIMIT_SECONDS / 60} minutes. Use the FrameCut macOS app for longer videos.` });
+      return;
+    }
+    const avail = transcriber.availability();
+    if ('reason' in avail) { setStatus({ kind: 'unavailable', message: avail.reason }); return; }
+    if (transcriber.download && !opts.confirmed && !(await transcriber.download.isReady())) {
+      const mb = transcriber.download.approxMB;
+      setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads a speech model (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
+      return;
+    }
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setStatus({ kind: 'running' });
+    setStatus({ kind: 'running', message: 'Preparing audio…' });
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const onProgress = (p: { phase: 'download' | 'transcribe'; progress: number }) => {
+      if (abortRef.current !== ctrl) return;
+      setStatus({ kind: 'running', message: p.phase === 'download' ? `Downloading speech model… ${Math.round(p.progress * 100)}%` : 'Transcribing on your device…' });
+    };
     try {
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => { reject(new Error('Subtitle generation timed out.')); ctrl.abort(); }, timeoutMsRef.current);
       });
       const segments = await Promise.race([
-        transcriber.transcribe({ mediaSrc: s.mainVideo.src, duration: s.mainVideo.duration || s.duration }, ctrl.signal),
+        transcriber.transcribe({ mediaSrc: s.mainVideo.src, duration: mediaDuration }, ctrl.signal, onProgress),
         timeout,
       ]);
-      const cues = segmentsToCues(segments, stateRef.current.duration || s.duration);
       if (abortRef.current !== ctrl) return;
+      const latest = stateRef.current;
+      const cues = segmentsToCues(mapSourceSegmentsToTimeline(segments, latest.clips), latest.duration || s.duration);
       if (cues.length === 0) {
         setStatus({ kind: 'empty', message: 'No speech found. Existing subtitles were left unchanged.' });
         return;
       }
       pushHistory();
       setState(prev => withSubs(prev, replaceAutoSubtitles(prev.subtitles, cues), recalculateDuration));
-      setStatus({ kind: 'done', message: `Generated ${cues.length} subtitle${cues.length === 1 ? '' : 's'}. Manual subtitles were kept.` });
+      setStatus({ kind: 'done', message: `Generated ${cues.length} subtitle${cues.length === 1 ? '' : 's'}. Manual subtitles were kept. ${LANGUAGE_COPY}` });
     } catch (err: any) {
       if (abortRef.current !== ctrl) return; // user cancelled; cancel() already reset status
       setStatus({ kind: 'error', message: `Couldn't generate subtitles: ${err?.message || 'unknown error'}` });

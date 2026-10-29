@@ -1,11 +1,9 @@
 /**
  * #27 Swappable speech-to-text interface.
  *
- * The web editor ships NO speech-to-text engine yet: provider, cost, languages and model
- * download are open questions for Jingtian. The default transcriber is therefore
- * "unavailable" — it makes no network calls and downloads nothing. A real engine (or a
- * test mock) plugs in via setTranscriber(), optionally running in a Web Worker through
- * createWorkerTranscriber().
+ * Default engine: on-device Whisper tiny in a Web Worker (utils/whisperTranscriber.ts),
+ * downloaded only after the user opts in. `unavailableTranscriber` is the fallback for
+ * browsers without WebAssembly / Web Audio. Tests inject mocks via setTranscriber().
  */
 export interface TranscriptSegment { start: number; end: number; text: string; }
 
@@ -15,13 +13,19 @@ export interface TranscribeRequest {
   /** Media duration in seconds. */
   duration: number;
   language?: string;
+  /** 16 kHz mono PCM, filled in by engines that decode audio on the main thread. */
+  audio?: Float32Array;
 }
+
+export interface TranscribeProgress { phase: 'download' | 'transcribe'; progress: number; }
 
 export interface Transcriber {
   readonly id: string;
+  /** Present when the engine needs a one-time opt-in download before first use. */
+  download?: { approxMB: number; source: string; isReady(): Promise<boolean> };
   /** Synchronous availability check; `reason` is user-facing copy when unavailable. */
   availability(): { available: true } | { available: false; reason: string };
-  transcribe(req: TranscribeRequest, signal: AbortSignal): Promise<TranscriptSegment[]>;
+  transcribe(req: TranscribeRequest, signal: AbortSignal, onProgress?: (p: TranscribeProgress) => void): Promise<TranscriptSegment[]>;
 }
 
 export const TRANSCRIBER_UNAVAILABLE_COPY =
@@ -34,6 +38,8 @@ export const unavailableTranscriber: Transcriber = {
 };
 
 let current: Transcriber = unavailableTranscriber;
+/** Called once at startup by the app to install the default engine. */
+export const installDefaultTranscriber = (t: Transcriber) => { current = t; };
 const listeners = new Set<() => void>();
 export const getTranscriber = () => current;
 export function setTranscriber(t: Transcriber | null) {
@@ -48,7 +54,7 @@ export function subscribeTranscriber(l: () => void) { listeners.add(l); return (
  *   worker → main: { type: 'progress', id, progress } | { type: 'result', id, segments } | { type: 'error', id, message }
  */
 export type TranscriberWorkerMessage =
-  | { type: 'progress'; id: number; progress: number }
+  | { type: 'progress'; id: number; progress: number; phase?: 'download' | 'transcribe' }
   | { type: 'result'; id: number; segments: TranscriptSegment[] }
   | { type: 'error'; id: number; message: string };
 
@@ -60,7 +66,7 @@ export function createWorkerTranscriber(
   return {
     id: opts.id ?? 'worker',
     availability: () => ({ available: true }),
-    transcribe(request, signal) {
+    transcribe(request, signal, onProgress) {
       return new Promise<TranscriptSegment[]>((resolve, reject) => {
         if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
         const worker = makeWorker();
@@ -71,7 +77,7 @@ export function createWorkerTranscriber(
         worker.onmessage = (e: MessageEvent<TranscriberWorkerMessage>) => {
           const m = e.data;
           if (!m || m.id !== id) return;
-          if (m.type === 'progress') opts.onProgress?.(m.progress);
+          if (m.type === 'progress') { opts.onProgress?.(m.progress); onProgress?.({ phase: m.phase ?? 'transcribe', progress: m.progress }); }
           else if (m.type === 'result') { done(); resolve(Array.isArray(m.segments) ? m.segments : []); }
           else if (m.type === 'error') { done(); reject(new Error(m.message || 'Transcription failed')); }
         };
