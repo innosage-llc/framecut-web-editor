@@ -9,6 +9,7 @@
  * Protocol: see utils/transcriber.ts. The request carries 16 kHz mono PCM in `audio`.
  */
 import { pipeline, env } from '@huggingface/transformers';
+import { groupWordsIntoSegments } from '../utils/whisperWords';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 
 export const WHISPER_MODEL_ID = 'Xenova/whisper-tiny';
@@ -44,14 +45,10 @@ self.onmessage = async (e: MessageEvent) => {
     });
     const transcriber = await asr;
     post({ type: 'progress', phase: 'transcribe', progress: 0 });
-    // No `language`: Whisper auto-detects. Timestamps are segment-level.
-    const out = await transcriber(audio, { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' });
-    const dur = audio.length / 16000;
-    const segments = (out?.chunks ?? []).map((c: any) => ({
-      start: Number(c.timestamp?.[0] ?? 0),
-      end: Number(c.timestamp?.[1] ?? dur),
-      text: String(c.text ?? ''),
-    }));
+    // No `language`: Whisper auto-detects. Word timestamps (same model files, cross-attention
+    // alignment) let FrameCut cut cues into subtitle-sized lines and trim text with the timing.
+    const out = await transcriber(audio, { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' });
+    const segments = groupWordsIntoSegments(out?.chunks ?? [], audio.length / 16000);
     post({ type: 'result', segments });
   } catch (err: any) {
     asr = null;

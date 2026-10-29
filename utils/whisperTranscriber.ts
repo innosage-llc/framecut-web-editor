@@ -56,9 +56,20 @@ export function isSilent(pcm: Float32Array, sampleRate = 16000, threshold = 0.01
   return true;
 }
 
-/** Drop Whisper non-speech markers like "[BLANK_AUDIO]", "(music)", "[Music]". */
-export const cleanWhisperSegments = (segs: TranscriptSegment[]) =>
-  segs.map(s => ({ ...s, text: s.text.replace(/\[[^\]]*\]|\([^)]*\)/g, '').replace(/\s+/g, ' ').trim() })).filter(s => s.text !== '');
+const stripMarkers = (t: string) => t.replace(/\[[^\]]*\]|\([^)]*\)/g, '');
+
+/** Drop Whisper non-speech markers like "[BLANK_AUDIO]", "(music)", "[Music]" (from words too). */
+export const cleanWhisperSegments = (segs: TranscriptSegment[]): TranscriptSegment[] =>
+  segs.map(s => {
+    const out: TranscriptSegment = { start: s.start, end: s.end, text: stripMarkers(s.text).replace(/\s+/g, ' ').trim() };
+    if (s.words) {
+      const words = s.words.filter(w => stripMarkers(w.text).trim() !== '');
+      if (words.length) { out.words = words; out.text = words.map(w => w.text).join('').replace(/\s+/g, ' ').trim(); }
+    }
+    return out;
+  }).filter(s => s.text !== '');
+
+export { groupWordsIntoSegments, CUE_MAX_SECONDS, CUE_MAX_CHARS, CUE_MAX_GAP_SECONDS } from './whisperWords';
 
 export interface WhisperDeps {
   makeWorker?: () => Worker;

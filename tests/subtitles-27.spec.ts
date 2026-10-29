@@ -8,7 +8,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isSilent, cleanWhisperSegments } from '../utils/whisperTranscriber';
-import { mapSourceSegmentsToTimeline, fitCuesAroundManual } from '../utils/subtitleGeneration';
+import { mapSourceSegmentsToTimeline, fitCuesAroundManual, segmentsToCues, replaceAutoSubtitles, MIN_FITTED_CUE_SECONDS } from '../utils/subtitleGeneration';
+import { groupWordsIntoSegments } from '../utils/whisperWords';
 import { parseSrt, parseVtt, toSrt, toVtt, parseSubtitleFile, formatCueTime, parseCueTime } from '../utils/subtitleFormats';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -518,5 +519,171 @@ test.describe('#27 QA warns: no overlap with manual cues; Checking-audio guard',
     await expect(status(page)).toHaveAttribute('data-kind', 'empty');
     await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__workerRuns)).toBe(0);
+  });
+});
+
+/** Real whisper-tiny q8 word output for the JFK sample (transformers.js 4.3.2, return_timestamps:'word'). */
+const JFK_WORDS: { text: string; timestamp: [number, number] }[] = [
+  [' And', 0.7, 1.08], [' so', 1.08, 1.34], [' my', 1.34, 1.7], [' fellow', 1.7, 2.3], [' Americans', 2.3, 3.76], [' ask', 3.76, 4.4],
+  [' not', 4.4, 5.68], [' what', 5.68, 6], [' your', 6, 6.42], [' country', 6.42, 6.76], [' can', 6.76, 6.96], [' do', 6.96, 7.2],
+  [' for', 7.2, 8.26], [' you,', 8.26, 8.28], [' ask', 8.62, 8.98], [' what', 8.98, 9.2], [' you', 9.2, 9.42], [' can', 9.42, 9.7],
+  [' do', 9.7, 9.88], [' for', 9.88, 10.06], [' your', 10.06, 10.56], [' country.', 10.56, 11],
+].map(([text, a, b]) => ({ text: text as string, timestamp: [a as number, b as number] }));
+
+const W = (text: string, start: number, end: number) => ({ text, start, end });
+const noOverlap = (cues: { start: number; end: number }[]) => {
+  const s = [...cues].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < s.length; i++) if (s[i].start < s[i - 1].end - 1e-9) return false;
+  return true;
+};
+
+test.describe('#27 fix round 3: word-accurate trims, cached-model status, no auto/auto overlap', () => {
+  test('word timestamps group into subtitle-sized cues that keep their words (pure)', () => {
+    const segs = groupWordsIntoSegments(JFK_WORDS as any, 11);
+    expect(segs.every(s => s.end - s.start <= 7 && s.words!.length > 0)).toBe(true);
+    expect(segs.map(s => s.text).join(' ')).toBe('And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.');
+    expect(segs[0].start).toBe(0.7);
+    expect(segs[segs.length - 1].end).toBe(11);
+    expect(noOverlap(segs)).toBe(true);
+    // Missing / backwards ends and out-of-order words are repaired; blank words are dropped.
+    const odd = groupWordsIntoSegments([{ text: ' b', timestamp: [1.5, 1] }, { text: ' a', timestamp: [1, null] }, { text: ' ', timestamp: [0, 1] }] as any, 5);
+    expect(odd).toEqual([{ start: 1, end: 1.5, text: 'a b', words: [W(' a', 1, 1), W(' b', 1.5, 1.5)] }]);
+  });
+
+  test('(1) a cue trimmed around a manual cue keeps only the words in the kept time (pure)', () => {
+    const [seg] = groupWordsIntoSegments(JFK_WORDS.slice(0, 5) as any, 11); // "And so my fellow Americans" 0.7–3.76
+    const out = fitCuesAroundManual([seg], [{ start: 1.4, end: 10 }]);
+    expect(out).toEqual([{ start: 0.7, end: 1.4, text: 'And so', words: [W(' And', 0.7, 1.08), W(' so', 1.08, 1.34)] }]);
+    // Kept part long enough but with no word in it → dropped, never the whole sentence.
+    expect(fitCuesAroundManual([{ start: 0, end: 4, text: 'late words', words: [W(' late', 2, 3), W(' words', 3, 4)] }], [{ start: 0.5, end: 4 }])).toEqual([]);
+    // Real-run QA case: claimed cue 0.6–15, sliver 0–0.6 had the full JFK sentence; now no word sits there → dropped.
+    const full = { start: 0, end: 11, text: 'whole sentence', words: JFK_WORDS.map(w => W(w.text, w.timestamp[0], w.timestamp[1])) };
+    expect(fitCuesAroundManual([full], [{ start: 0.6, end: 15 }])).toEqual([]);
+  });
+
+  test('0.3 s boundary: exactly MIN_FITTED_CUE_SECONDS is kept, just under is dropped (pure)', () => {
+    expect(MIN_FITTED_CUE_SECONDS).toBe(0.3);
+    const m = [{ start: 1, end: 3 }];
+    expect(fitCuesAroundManual([{ start: 0.7, end: 2, text: 'edge' }], m)).toEqual([{ start: 0.7, end: 1, text: 'edge' }]);
+    expect(fitCuesAroundManual([{ start: 0.71, end: 2, text: 'under' }], m)).toEqual([]);
+    expect(fitCuesAroundManual([{ start: 2.5, end: 3.3, text: 'after' }], m)).toEqual([{ start: 3, end: 3.3, text: 'after' }]);
+    expect(fitCuesAroundManual([{ start: 2.5, end: 3.29, text: 'after-under' }], m)).toEqual([]);
+    // With words: boundary piece kept only with a word in it.
+    expect(fitCuesAroundManual([{ start: 0.7, end: 2, text: 'hi there', words: [W(' hi', 0.7, 0.95), W(' there', 1.2, 2)] }], m))
+      .toEqual([{ start: 0.7, end: 1, text: 'hi', words: [W(' hi', 0.7, 0.95)] }]);
+  });
+
+  test('manual cue inside a generated range: longest side kept, with that side\'s words (pure)', () => {
+    const words = [W(' one', 4, 4.8), W(' two', 5.1, 5.9), W(' three', 6.2, 7), W(' four', 7.1, 7.9)];
+    expect(fitCuesAroundManual([{ start: 4, end: 8, text: 'one two three four', words }], [{ start: 5, end: 6 }]))
+      .toEqual([{ start: 6, end: 8, text: 'three four', words: words.slice(2) }]);
+    // Without word timings the time is trimmed and the text is kept (nothing finer to cut by).
+    expect(fitCuesAroundManual([{ start: 4, end: 8, text: 'SPAN' }], [{ start: 5, end: 6 }])).toEqual([{ start: 6, end: 8, text: 'SPAN' }]);
+  });
+
+  test('(3) generated cues never overlap each other, whatever the engine returns (pure)', () => {
+    // QA repro: SPAN 4–8 and ADJ 6–7 from the engine, manual 5–6 → previously SPAN' 6–8 and ADJ 6–7 overlapped.
+    const cues = segmentsToCues([
+      { start: 0.71, end: 3, text: 'U029' }, { start: 3, end: 3.31, text: 'O031' }, { start: 4, end: 8, text: 'SPAN' },
+      { start: 6, end: 7, text: 'ADJ' }, { start: 9, end: 10, text: 'CLEAR' }, { start: 1.5, end: 2.5, text: 'INSIDE' },
+    ], 60);
+    expect(noOverlap(cues)).toBe(true);
+    const subs = replaceAutoSubtitles([{ id: 'm1', start: 1, end: 3, text: 'MAN1' } as any, { id: 'm2', start: 5, end: 6, text: 'MAN2' } as any], cues);
+    expect(noOverlap(subs)).toBe(true);
+    expect(subs.filter(s => s.autoGenerated).map(s => [s.text, s.start, s.end])).toEqual([['O031', 3, 3.31], ['SPAN', 6, 8], ['CLEAR', 9, 10]]);
+    // Whisper-style failures: a missing end stretched to the media end, stitched chunks repeating a range, words.
+    const w = segmentsToCues([
+      { start: 0, end: 30, text: 'a b', words: [W(' a', 0, 1), W(' b', 1, 2)] },
+      { start: 3, end: 5, text: 'c', words: [W(' c', 3, 5)] },
+      { start: 4, end: 6, text: 'c d', words: [W(' c', 4, 5), W(' d', 5, 6)] },
+    ], 30);
+    expect(noOverlap(w)).toBe(true);
+    expect(w.map(c => [c.text, c.start, c.end])).toEqual([['a b', 0, 2], ['c', 3, 5], ['d', 5, 6]]);
+    // Randomised: any engine output gives non-overlapping cues.
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let k = 0; k < 200; k++) {
+      const segs = Array.from({ length: 8 }, (_, i) => { const a = rnd() * 20; const b = a + rnd() * 6; return { start: a, end: b, text: 'x' + i,
+        words: rnd() < 0.5 ? undefined : [W(' p', a, (a + b) / 2), W(' q', (a + b) / 2, b)] }; });
+      const c = segmentsToCues(segs, 20);
+      expect(noOverlap(c)).toBe(true);
+      expect(noOverlap(replaceAutoSubtitles([{ id: 'm', start: 5, end: 7, text: 'M' } as any], c))).toBe(true);
+    }
+  });
+
+  test('(1) in the editor: regenerate around a claimed cue trims text with the words; undo restores', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    const js = JSON.stringify([{ start: 2, end: 6, text: 'alpha beta gamma delta', words: [W(' alpha', 2, 3), W(' beta', 3, 4), W(' gamma', 4, 5), W(' delta', 5, 6)] }]);
+    await injectMock(page, `return ${js};`);
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    const first = await subs(page);
+    expect(first.map(x => [x.text, x.start, x.end])).toEqual([['alpha beta gamma delta', 2, 6]]);
+    expect(Object.keys(first[0])).not.toContain('words');
+    // Add a manual cue over the second half, then regenerate.
+    await page.getByTestId('subtitle-import-input').setInputFiles({ name: 'm.srt', mimeType: 'text/plain', buffer: Buffer.from('1\n00:00:03,900 --> 00:00:08,000\nMANUAL\n') });
+    await expect.poll(async () => (await subs(page)).length).toBe(2);
+    const before = (await subs(page)).map(x => [x.text, x.start, x.end, x.autoGenerated]);
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    const after = (await subs(page)).slice().sort((a, b) => a.start - b.start);
+    expect(after.map(x => [x.text, x.start, x.end, x.autoGenerated])).toEqual([['alpha beta', 2, 3.9, true], ['MANUAL', 3.9, 8, false]]);
+    expect(noOverlap(after)).toBe(true);
+    // Undo the trimmed regenerate → exactly the state before it; redo → trimmed again.
+    await page.evaluate(() => (window as any).__FRAMECUT_E2E__.undo());
+    await expect.poll(async () => (await subs(page)).map(x => [x.text, x.start, x.end, x.autoGenerated])).toEqual(before);
+    await page.evaluate(() => (window as any).__FRAMECUT_E2E__.redo());
+    await expect.poll(async () => (await subs(page)).slice().sort((a, b) => a.start - b.start).map(x => [x.text, x.start, x.end])).toEqual([['alpha beta', 2, 3.9], ['MANUAL', 3.9, 8]]);
+  });
+
+  test('(3) in the editor: overlapping engine segments never produce overlapping cues', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await injectMock(page, `return [{start:4,end:8,text:'SPAN'},{start:6,end:7,text:'ADJ'},{start:7.5,end:9,text:'TAIL'},{start:0,end:60,text:'STRETCHED'}];`);
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    const s = await subs(page);
+    expect(noOverlap(s)).toBe(true);
+    expect(s.map(x => [x.text, x.start, x.end]).sort((a: any, b: any) => a[1] - b[1])).toEqual([['STRETCHED', 0, 60]]); // earliest-starting wins; the rest would overlap it
+  });
+
+  async function cachedModelEngine(page: Page, cached: boolean) {
+    await page.evaluate((cached) => {
+      const w = window as any; w.__statuses = [];
+      const src = `self.onmessage = (e) => { const m = e.data; if (m.type !== 'transcribe') return;
+        self.postMessage({ type: 'progress', id: m.id, phase: 'download', progress: 0.16 });
+        setTimeout(() => { self.postMessage({ type: 'progress', id: m.id, phase: 'download', progress: 1 });
+          self.postMessage({ type: 'progress', id: m.id, phase: 'transcribe', progress: 0 }); }, 400);
+        setTimeout(() => self.postMessage({ type: 'result', id: m.id, segments: [{ start: 1, end: 2, text: 'hi' }] }), 800); };`;
+      const E = w.__FRAMECUT_E2E__;
+      E.setTranscriber(E.createWhisperTranscriber({
+        makeWorker: () => new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))),
+        isReady: async () => cached,
+        decodeAudio: async () => { const a = new Float32Array(16000); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i / 5) * 0.3; return a; },
+      }));
+      const obs = new MutationObserver(() => { const el = document.querySelector('[data-testid="subtitle-status"]'); if (el) w.__statuses.push(el.textContent); });
+      obs.observe(document.body, { subtree: true, childList: true, characterData: true });
+    }, cached);
+  }
+
+  test('(2) cached model: status says "Loading speech model…", never "Downloading… %"', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await cachedModelEngine(page, true);
+    await generateBtn(page).click();
+    await expect(status(page)).toContainText('Loading speech model');
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    const seen: string[] = await page.evaluate(() => (window as any).__statuses);
+    expect(seen.some(t => /Loading speech model/.test(t))).toBe(true);
+    expect(seen.some(t => /Transcribing on your device/.test(t))).toBe(true);
+    expect(seen.filter(t => /Downloading/.test(t))).toEqual([]);
+  });
+
+  test('(2) first download (not cached, after opt-in) still shows "Downloading… %"', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await cachedModelEngine(page, false);
+    await generateBtn(page).click();
+    await page.getByRole('button', { name: 'Download model and generate subtitles' }).click();
+    await expect(status(page)).toContainText('Downloading speech model… 16%');
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    const seen: string[] = await page.evaluate(() => (window as any).__statuses);
+    expect(seen.filter(t => /Loading speech model/.test(t))).toEqual([]);
   });
 });

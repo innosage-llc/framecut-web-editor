@@ -5,7 +5,9 @@
  * downloaded only after the user opts in. `unavailableTranscriber` is the fallback for
  * browsers without WebAssembly / Web Audio. Tests inject mocks via setTranscriber().
  */
-export interface TranscriptSegment { start: number; end: number; text: string; }
+export interface TranscriptWord { start: number; end: number; text: string; }
+/** `words` (optional) are word-level timings; when present, trimming a cue keeps only the words inside it. */
+export interface TranscriptSegment { start: number; end: number; text: string; words?: TranscriptWord[]; }
 
 export interface TranscribeRequest {
   /** Source media for the main video (blob: or same-origin URL). */

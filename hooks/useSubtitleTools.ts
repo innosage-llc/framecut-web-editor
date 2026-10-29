@@ -63,11 +63,13 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
       if (abortRef.current !== ctrl) return; // cancelled while checking; cancel() already reset status
       if (!speech) { release(); setStatus({ kind: 'empty', message: 'No speech found. Existing subtitles were left unchanged.' }); return; }
     }
-    if (transcriber.download && !opts.confirmed) {
-      let ready = false;
-      try { ready = await transcriber.download.isReady(); } catch { ready = false; }
+    // Is the model already in the browser cache? Then nothing is downloaded: transformers.js
+    // still reports file "progress" while reading the cache, which must not read as a download.
+    let cached = false;
+    if (transcriber.download) {
+      try { cached = await transcriber.download.isReady(); } catch { cached = false; }
       if (abortRef.current !== ctrl) return;
-      if (!ready) {
+      if (!cached && !opts.confirmed) {
         release();
         const mb = transcriber.download.approxMB;
         setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads a speech model (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
@@ -75,11 +77,13 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
       }
     }
 
-    setStatus({ kind: 'running', message: 'Preparing audio…' });
+    setStatus({ kind: 'running', message: cached ? 'Loading speech model…' : 'Preparing audio…' });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onProgress = (p: { phase: 'download' | 'transcribe'; progress: number }) => {
       if (abortRef.current !== ctrl) return;
-      setStatus({ kind: 'running', message: p.phase === 'download' ? `Downloading speech model… ${Math.round(p.progress * 100)}%` : 'Transcribing on your device…' });
+      setStatus({ kind: 'running', message: p.phase === 'download'
+        ? (cached ? 'Loading speech model…' : `Downloading speech model… ${Math.round(p.progress * 100)}%`)
+        : 'Transcribing on your device…' });
     };
     try {
       const timeout = new Promise<never>((_, reject) => {

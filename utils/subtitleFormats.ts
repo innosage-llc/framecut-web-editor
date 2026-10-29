@@ -3,7 +3,7 @@
  * Round-trip of start/end (millisecond precision) and multi-line text is lossless.
  * Styling/position are not representable in SRT/VTT and are not exported.
  */
-export interface SubtitleCue { start: number; end: number; text: string; }
+export interface SubtitleCue { start: number; end: number; text: string; /** word timings from the engine; never stored on a Subtitle */ words?: { start: number; end: number; text: string }[]; }
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
 
