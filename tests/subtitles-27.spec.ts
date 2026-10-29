@@ -180,7 +180,7 @@ test.describe('#27 subtitle tools in the editor', () => {
     await expect(generateBtn(page)).toHaveAttribute('data-available', 'true');
     await generateBtn(page).click();
     await expect(status(page)).toHaveAttribute('data-kind', 'confirm-download');
-    await expect(status(page)).toContainText('speech model (about 58 MB)'); // measured: 43.6 MB model + 14.3 MB ONNX Runtime
+    await expect(status(page)).toContainText('speech model (about 81 MB)'); // measured: 66.4 MB model (fp32 encoder) + 14.3 MB ONNX Runtime
     await expect(status(page)).toContainText('cached in your browser');
     await expect(status(page)).toContainText('English is officially supported');
     await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toBeVisible();
@@ -764,9 +764,9 @@ test.describe('#27 fix round 4: combined progress, clause-aligned cues, higher-a
   test('(3) model catalogue: measured sizes and licenses (pure)', () => {
     expect(WHISPER_MODELS.tiny.id).toBe('Xenova/whisper-tiny');
     expect(WHISPER_MODELS.base.id).toBe('Xenova/whisper-base');
-    expect(modelBytes(WHISPER_MODELS.tiny)).toBe(43622127);
+    expect(modelBytes(WHISPER_MODELS.tiny)).toBe(66406756);
     expect(modelBytes(WHISPER_MODELS.base)).toBe(79677901);
-    expect(approxDownloadMB(WHISPER_MODELS.tiny)).toBe(58);
+    expect(approxDownloadMB(WHISPER_MODELS.tiny)).toBe(81);
     expect(approxDownloadMB(WHISPER_MODELS.base)).toBe(94);
     expect([WHISPER_MODELS.tiny.license, WHISPER_MODELS.base.license]).toEqual(['Apache-2.0', 'Apache-2.0']);
   });
@@ -791,7 +791,7 @@ test.describe('#27 fix round 4: combined progress, clause-aligned cues, higher-a
     await expect(picker).toHaveValue('tiny'); // Standard by default
     await modelEngine(page);
     await generateBtn(page).click();
-    await expect(status(page)).toContainText('a speech model (about 58 MB)');
+    await expect(status(page)).toContainText('a speech model (about 81 MB)');
     await page.getByRole('button', { name: 'Not now' }).click();
 
     await picker.selectOption('base');
@@ -818,15 +818,15 @@ test.describe('#27 fix round 5: real extra download size, balanced fallback spli
   test('(1) size = what is still missing: full, runtime cached, partial, all cached (pure)', () => {
     const tiny = WHISPER_MODELS.tiny, base = WHISPER_MODELS.base;
     const mb = (m: typeof tiny, urls: string[]) => bytesToMB(sumBytes(missingFiles(m, urls, WASM)));
-    expect(mb(tiny, [])).toBe(58);
+    expect(mb(tiny, [])).toBe(81);
     expect(mb(base, [])).toBe(94);
     // Standard used first: runtime + tiny files cached → Higher accuracy needs only its own files.
     const tinyAll = [...Object.keys(tiny.files).map(f => HF(tiny.id, f)), WASM];
     expect(mb(base, tinyAll)).toBe(80);
     expect(missingFiles(base, tinyAll, WASM)[ORT_WASM_KEY]).toBeUndefined();
     expect(mb(tiny, tinyAll)).toBe(0);
-    // Only the runtime cached → Standard is 44 MB.
-    expect(mb(tiny, [WASM])).toBe(44);
+    // Only the runtime cached → Standard is 66 MB.
+    expect(mb(tiny, [WASM])).toBe(66);
     // Partial: base encoder + runtime cached → configs + decoder only (≈ 56.5 MB).
     const part = [WASM, HF(base.id, 'onnx/encoder_model_quantized.onnx')];
     expect(sumBytes(missingFiles(base, part, WASM))).toBe(modelBytes(base) - 23200850);
@@ -864,15 +864,15 @@ test.describe('#27 fix round 5: real extra download size, balanced fallback spli
   }
   const tinyUrls = (wasm: string) => [...Object.keys(WHISPER_MODELS.tiny.files).map(f => HF(WHISPER_MODELS.tiny.id, f)), wasm];
 
-  test('(1) in the editor: nothing cached → 58 / 94 MB; prompt and button use the same figure', async ({ page, baseURL }) => {
+  test('(1) in the editor: nothing cached → 81 / 94 MB; prompt and button use the same figure', async ({ page, baseURL }) => {
     await setup(page, baseURL!, FIXTURE, 60);
     await cacheEngine(page, () => []);
     const picker = page.getByTestId('subtitle-model');
-    await expect(picker.locator('option[value="tiny"]')).toHaveText('Standard · 58 MB download');
-    await expect(picker.locator('option[value="base"]')).toHaveText('Higher accuracy · 94 MB download · about 2× slower');
+    await expect(picker.locator('option[value="tiny"]')).toHaveText('Standard · 81 MB download');
+    await expect(picker.locator('option[value="base"]')).toHaveText('Higher accuracy · 94 MB download · about 1.8× slower');
     await generateBtn(page).click();
-    await expect(status(page)).toContainText('a speech model (about 58 MB)');
-    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveText(/Download 58 MB/);
+    await expect(status(page)).toContainText('a speech model (about 81 MB)');
+    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveText(/Download 81 MB/);
   });
 
   test('(1) in the editor: after Standard, Higher accuracy shows the real extra ~80 MB; Standard shows downloaded', async ({ page, baseURL }) => {
@@ -880,7 +880,7 @@ test.describe('#27 fix round 5: real extra download size, balanced fallback spli
     await cacheEngine(page, tinyUrls);
     const picker = page.getByTestId('subtitle-model');
     await expect(picker.locator('option[value="tiny"]')).toHaveText('Standard · downloaded');
-    await expect(picker.locator('option[value="base"]')).toHaveText('Higher accuracy · 80 MB download · about 2× slower');
+    await expect(picker.locator('option[value="base"]')).toHaveText('Higher accuracy · 80 MB download · about 1.8× slower');
     // Standard is fully cached → no prompt at all.
     await generateBtn(page).click();
     await expect(status(page)).toHaveAttribute('data-kind', 'done');
@@ -895,8 +895,8 @@ test.describe('#27 fix round 5: real extra download size, balanced fallback spli
   test('(1) in the editor: partially cached Higher accuracy shows only the missing part', async ({ page, baseURL }) => {
     await setup(page, baseURL!, FIXTURE, 60);
     await cacheEngine(page, (wasm) => [wasm, HF(WHISPER_MODELS.base.id, 'onnx/encoder_model_quantized.onnx')]);
-    await expect(page.getByTestId('subtitle-model').locator('option[value="base"]')).toHaveText('Higher accuracy · 56 MB download · about 2× slower');
-    await expect(page.getByTestId('subtitle-model').locator('option[value="tiny"]')).toHaveText('Standard · 44 MB download');
+    await expect(page.getByTestId('subtitle-model').locator('option[value="base"]')).toHaveText('Higher accuracy · 56 MB download · about 1.8× slower');
+    await expect(page.getByTestId('subtitle-model').locator('option[value="tiny"]')).toHaveText('Standard · 66 MB download');
   });
 
   const W5 = (spec: [string, number, number][]) => spec.map(([text, a, b]) => ({ text, timestamp: [a, b] as [number, number] }));
@@ -934,7 +934,7 @@ test.describe('#27 fix round 5: real extra download size, balanced fallback spli
   });
 
   test('(3) speed note is measured and only on Higher accuracy (pure)', () => {
-    expect(WHISPER_MODELS.base.speedNote).toBe('about 2× slower');
+    expect(WHISPER_MODELS.base.speedNote).toBe('about 1.8× slower');
     expect(WHISPER_MODELS.tiny.speedNote).toBeUndefined();
   });
 });

@@ -18,10 +18,7 @@ env.allowLocalModels = false;
 env.useBrowserCache = true;
 const onnx = (env.backends as any).onnx;
 onnx.wasm.wasmPaths = { wasm: ortWasmUrl };
-// Multi-threaded WASM needs SharedArrayBuffer, i.e. a cross-origin-isolated page (COOP/COEP
-// headers). Measured: 4 threads ran 1.5x (tiny) / 1.7x (base) faster with identical text. The
-// app is not isolated today, so this stays single-threaded until those headers are served.
-onnx.wasm.numThreads = (self as any).crossOriginIsolated ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) : 1;
+onnx.wasm.numThreads = 1; // single-threaded: the app is not cross-origin isolated (no SharedArrayBuffer)
 const ORT_WASM_URL = new URL(ortWasmUrl, self.location.href).href;
 
 /**
@@ -61,11 +58,16 @@ self.onmessage = async (e: MessageEvent) => {
       .then(bin => { if (bin) onnx.wasm.wasmBinary = bin; });
     await wasmReady;
     asr[key] ??= pipeline('automatic-speech-recognition', model.id, {
-      dtype: 'q8',
+      dtype: model.dtype as any,
       device: 'wasm',
-      progress_callback: (p: any) => {
-        if (p?.status === 'progress' && p.file) post({ type: 'progress', phase: 'download', progress: combined(p.file, p.loaded ?? 0) });
-      },
+      // Only when something must be downloaded: with a progress callback transformers.js probes
+      // file sizes over the network (and guesses q8 names for a mixed dtype), so a fully cached
+      // model would still hit huggingface.co.
+      ...(Object.keys(missing).some(f => f !== ORT_WASM_KEY) ? {
+        progress_callback: (p: any) => {
+          if (p?.status === 'progress' && p.file) post({ type: 'progress', phase: 'download', progress: combined(p.file, p.loaded ?? 0) });
+        },
+      } : {}),
     });
     const transcriber = await asr[key];
     post({ type: 'progress', phase: 'transcribe', progress: 0 });

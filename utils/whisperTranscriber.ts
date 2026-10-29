@@ -24,8 +24,8 @@ export function setWhisperModel(k: WhisperModelKey) {
 export const subscribeWhisperModel = (l: () => void) => { modelListeners.add(l); return () => { modelListeners.delete(l); }; };
 
 export const WHISPER_MODEL_ID = WHISPER_MODELS.tiny.id;
-/** Standard model: 43.6 MB (q8 encoder 10.1 + merged decoder 30.7 + tokenizer/config 2.8) + 14.3 MB ONNX Runtime WASM. */
-export const WHISPER_APPROX_DOWNLOAD_MB = approxDownloadMB(WHISPER_MODELS.tiny); // 58
+/** Standard model: 66.4 MB (fp32 encoder 32.9 + q8 merged decoder 30.7 + tokenizer/config 2.8) + 14.3 MB ONNX Runtime WASM. */
+export const WHISPER_APPROX_DOWNLOAD_MB = approxDownloadMB(WHISPER_MODELS.tiny); // 81
 export const WEB_TRANSCRIBE_LIMIT_SECONDS = 10 * 60;
 
 /** Absolute URL of the self-hosted ONNX Runtime wasm (the worker caches it under this key). */

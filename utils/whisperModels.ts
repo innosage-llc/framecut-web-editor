@@ -1,6 +1,6 @@
 /**
  * #27 Whisper model catalogue (pure: shared by the worker and the main thread).
- * Sizes are the exact bytes transformers.js 4.3.2 fetches for dtype q8 (measured Oct 2026
+ * Sizes are the exact bytes transformers.js 4.3.2 fetches for each model's dtype (measured Oct 2026
  * from the Hugging Face API and a real download). Both models are Apache-2.0 on Hugging Face
  * (OpenAI's upstream Whisper weights are MIT). ORT_WASM_BYTES is the self-hosted ONNX Runtime
  * binary, fetched once from the app's own origin.
@@ -12,7 +12,9 @@ export interface WhisperModelInfo {
   id: string;
   label: string;
   license: string;
-  /** Measured speed vs Standard (single-thread WASM, Chromium, 11 s and 60 s clips). */
+  /** transformers.js dtype (per file where mixed). */
+  dtype: string | Record<string, string>;
+  /** Measured vs Standard (fp32 enc + q8 dec), single-thread WASM, Chromium: 60 s TED 30.0-31.3 s vs 16.4-18.5 s, JFK 4.3-4.5 s vs 2.4-2.5 s (1.7-1.8x). */
   speedNote?: string;
   /** file path inside the repo → bytes */
   files: Record<string, number>;
@@ -22,18 +24,21 @@ const COMMON = { 'config.json': 2248, 'preprocessor_config.json': 339, 'tokenize
 
 export const WHISPER_MODELS: Record<WhisperModelKey, WhisperModelInfo> = {
   tiny: {
+    // Full-precision encoder + q8 decoder: on a 60 s TED clip the all-q8 tiny differed from fp32
+    // tiny by 23.6% of words (18.2% WER on noisy JFK); this mix is 2.2% (0%) for ~13% more time.
     key: 'tiny', id: 'Xenova/whisper-tiny', label: 'Standard', license: 'Apache-2.0',
-    files: { ...COMMON, 'generation_config.json': 3716, 'onnx/encoder_model_quantized.onnx': 10124910, 'onnx/decoder_model_merged_quantized.onnx': 30727765 },
+    dtype: { encoder_model: 'fp32', decoder_model_merged: 'q8' },
+    files: { ...COMMON, 'generation_config.json': 3716, 'onnx/encoder_model.onnx': 32909539, 'onnx/decoder_model_merged_quantized.onnx': 30727765 },
   },
   base: {
-    key: 'base', id: 'Xenova/whisper-base', label: 'Higher accuracy', license: 'Apache-2.0', speedNote: 'about 2× slower',
+    key: 'base', id: 'Xenova/whisper-base', label: 'Higher accuracy', license: 'Apache-2.0', dtype: 'q8', speedNote: 'about 1.8× slower',
     files: { ...COMMON, 'generation_config.json': 3776, 'onnx/encoder_model_quantized.onnx': 23200850, 'onnx/decoder_model_merged_quantized.onnx': 53707539 },
   },
 };
 
 export const ORT_WASM_BYTES = 14264838;
 export const modelBytes = (m: WhisperModelInfo) => Object.values(m.files).reduce((a, b) => a + b, 0);
-/** First-time download in decimal MB, rounded: tiny 58, base 94. */
+/** First-time download in decimal MB, rounded: tiny 81, base 94. */
 export const approxDownloadMB = (m: WhisperModelInfo) => Math.round((modelBytes(m) + ORT_WASM_BYTES) / 1e6);
 
 /** Cache transformers.js stores model files in; the worker stores the ORT wasm there too. */
