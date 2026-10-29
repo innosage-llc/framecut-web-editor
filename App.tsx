@@ -20,7 +20,7 @@ import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSubtitleTools } from './hooks/useSubtitleTools';
 import SubtitleTools from './components/SubtitleTools';
 import { setTranscriber, createWorkerTranscriber, createStubWorker, installDefaultTranscriber } from './utils/transcriber';
-import { createWhisperTranscriber } from './utils/whisperTranscriber';
+import { createWhisperTranscriber, ortWasmAbsoluteUrl } from './utils/whisperTranscriber';
 
 // #27: on-device Whisper is the default engine (opt-in download on first use).
 installDefaultTranscriber(createWhisperTranscriber());
@@ -190,6 +190,7 @@ const App: React.FC = () => {
       createWorkerTranscriber,
       createStubWorker,
       createWhisperTranscriber,
+      ortWasmUrl: ortWasmAbsoluteUrl,
       setSubtitleGenerationTimeoutMs: (ms: number) => subtitleTools.setTimeoutMs(ms),
       updateSubtitle: (id: string, patch: Partial<Subtitle>) => {
         const sub = stateRef.current.subtitles.find(x => x.id === id);
@@ -447,6 +448,7 @@ const App: React.FC = () => {
               onDismiss={subtitleTools.dismiss}
               model={subtitleTools.model}
               onModelChange={subtitleTools.setModel}
+              modelSizes={subtitleTools.modelSizes}
             />
           }
         />

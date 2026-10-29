@@ -9,8 +9,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { isSilent, cleanWhisperSegments } from '../utils/whisperTranscriber';
 import { mapSourceSegmentsToTimeline, fitCuesAroundManual, segmentsToCues, replaceAutoSubtitles, MIN_FITTED_CUE_SECONDS } from '../utils/subtitleGeneration';
-import { groupWordsIntoSegments, chooseFallbackBreak } from '../utils/whisperWords';
-import { WHISPER_MODELS, approxDownloadMB, modelBytes, createCombinedProgress } from '../utils/whisperModels';
+import { groupWordsIntoSegments, chooseFallbackBreak, splitBalanced } from '../utils/whisperWords';
+import { WHISPER_MODELS, approxDownloadMB, modelBytes, createCombinedProgress, missingFiles, sumBytes, bytesToMB, ORT_WASM_KEY, ORT_WASM_BYTES } from '../utils/whisperModels';
 import { parseSrt, parseVtt, toSrt, toVtt, parseSubtitleFile, formatCueTime, parseCueTime } from '../utils/subtitleFormats';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -808,5 +808,133 @@ test.describe('#27 fix round 4: combined progress, clause-aligned cues, higher-a
 
     await picker.selectOption('tiny');
     expect(await page.evaluate(() => localStorage.getItem('framecut-whisper-model'))).toBe('tiny');
+  });
+});
+
+test.describe('#27 fix round 5: real extra download size, balanced fallback splits, speed note', () => {
+  const HF = (id: string, f: string) => `https://huggingface.co/${id}/resolve/main/${f}`;
+  const WASM = 'http://localhost/assets/ort-wasm-simd-threaded-abc.wasm';
+
+  test('(1) size = what is still missing: full, runtime cached, partial, all cached (pure)', () => {
+    const tiny = WHISPER_MODELS.tiny, base = WHISPER_MODELS.base;
+    const mb = (m: typeof tiny, urls: string[]) => bytesToMB(sumBytes(missingFiles(m, urls, WASM)));
+    expect(mb(tiny, [])).toBe(58);
+    expect(mb(base, [])).toBe(94);
+    // Standard used first: runtime + tiny files cached → Higher accuracy needs only its own files.
+    const tinyAll = [...Object.keys(tiny.files).map(f => HF(tiny.id, f)), WASM];
+    expect(mb(base, tinyAll)).toBe(80);
+    expect(missingFiles(base, tinyAll, WASM)[ORT_WASM_KEY]).toBeUndefined();
+    expect(mb(tiny, tinyAll)).toBe(0);
+    // Only the runtime cached → Standard is 44 MB.
+    expect(mb(tiny, [WASM])).toBe(44);
+    // Partial: base encoder + runtime cached → configs + decoder only (≈ 56.5 MB).
+    const part = [WASM, HF(base.id, 'onnx/encoder_model_quantized.onnx')];
+    expect(sumBytes(missingFiles(base, part, WASM))).toBe(modelBytes(base) - 23200850);
+    expect(mb(base, part)).toBe(56);
+    // Another model's files don't count; a tiny remainder still shows at least 1 MB.
+    expect(mb(base, Object.keys(tiny.files).map(f => HF(tiny.id, f)))).toBe(94);
+    expect(bytesToMB(2248)).toBe(1);
+    expect(ORT_WASM_BYTES).toBe(14264838);
+  });
+
+  test('(1) partial-download progress still runs 0 → 100% over only the missing files (pure)', () => {
+    const base = WHISPER_MODELS.base;
+    const missing = missingFiles(base, [WASM, ...Object.keys(base.files).filter(f => !f.includes('decoder')).map(f => HF(base.id, f))], WASM);
+    expect(Object.keys(missing)).toEqual(['onnx/decoder_model_merged_quantized.onnx']);
+    const p = createCombinedProgress(base, missing);
+    expect(p('config.json', 2248)).toBe(0); // cached file reading from cache doesn't move the bar
+    expect(p('onnx/decoder_model_merged_quantized.onnx', 53707539 / 2)).toBeCloseTo(0.5, 5);
+    expect(p('onnx/decoder_model_merged_quantized.onnx', 53707539)).toBe(1);
+  });
+
+  async function cacheEngine(page: Page, urls: (wasm: string) => string[]) {
+    const wasm: string = await page.evaluate(() => (window as any).__FRAMECUT_E2E__.ortWasmUrl());
+    await page.evaluate(async (list) => {
+      const c = await caches.open('transformers-cache');
+      for (const u of list) await c.put(u, new Response('x'));
+      const w = window as any; w.__runs = 0;
+      const src = `self.onmessage = (e) => { const m = e.data; if (m.type !== 'transcribe') return;
+        self.postMessage({ type: 'result', id: m.id, segments: [{ start: 1, end: 2, text: 'ok ' + m.request.model }] }); };`;
+      const E = w.__FRAMECUT_E2E__;
+      E.setTranscriber(E.createWhisperTranscriber({ // real Cache API size check: no isReady / remainingMB override
+        makeWorker: () => { w.__runs++; return new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))); },
+        decodeAudio: async () => { const a = new Float32Array(16000); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i / 5) * 0.3; return a; },
+      }));
+    }, urls(wasm));
+  }
+  const tinyUrls = (wasm: string) => [...Object.keys(WHISPER_MODELS.tiny.files).map(f => HF(WHISPER_MODELS.tiny.id, f)), wasm];
+
+  test('(1) in the editor: nothing cached → 58 / 94 MB; prompt and button use the same figure', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await cacheEngine(page, () => []);
+    const picker = page.getByTestId('subtitle-model');
+    await expect(picker.locator('option[value="tiny"]')).toHaveText('Standard · 58 MB download');
+    await expect(picker.locator('option[value="base"]')).toHaveText('Higher accuracy · 94 MB download · about 2× slower');
+    await generateBtn(page).click();
+    await expect(status(page)).toContainText('a speech model (about 58 MB)');
+    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveText(/Download 58 MB/);
+  });
+
+  test('(1) in the editor: after Standard, Higher accuracy shows the real extra ~80 MB; Standard shows downloaded', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await cacheEngine(page, tinyUrls);
+    const picker = page.getByTestId('subtitle-model');
+    await expect(picker.locator('option[value="tiny"]')).toHaveText('Standard · downloaded');
+    await expect(picker.locator('option[value="base"]')).toHaveText('Higher accuracy · 80 MB download · about 2× slower');
+    // Standard is fully cached → no prompt at all.
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    expect((await subs(page)).map(x => x.text)).toEqual(['ok tiny']);
+    await picker.selectOption('base');
+    await generateBtn(page).click();
+    await expect(status(page)).toContainText('the higher-accuracy speech model (about 80 MB)');
+    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveText(/Download 80 MB/);
+    expect(unexpected.filter(u => MODELISH.test(u))).toEqual([]);
+  });
+
+  test('(1) in the editor: partially cached Higher accuracy shows only the missing part', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await cacheEngine(page, (wasm) => [wasm, HF(WHISPER_MODELS.base.id, 'onnx/encoder_model_quantized.onnx')]);
+    await expect(page.getByTestId('subtitle-model').locator('option[value="base"]')).toHaveText('Higher accuracy · 56 MB download · about 2× slower');
+    await expect(page.getByTestId('subtitle-model').locator('option[value="tiny"]')).toHaveText('Standard · 44 MB download');
+  });
+
+  const W5 = (spec: [string, number, number][]) => spec.map(([text, a, b]) => ({ text, timestamp: [a, b] as [number, number] }));
+
+  test('(2) QA case: 40 evenly paced unpunctuated words → balanced cues, not 80/13/20/13 (pure)', () => {
+    const ws: [string, number, number][] = []; for (let i = 0; i < 40; i++) ws.push([` word${i}`, i * 0.35, i * 0.35 + 0.3]);
+    const r = groupWordsIntoSegments(W5(ws) as any, 20);
+    const lens = r.map(s => s.text.length);
+    expect(lens).toEqual([66, 62, 69, 69]);
+    expect(Math.min(...lens) / Math.max(...lens)).toBeGreaterThan(0.85);
+    for (const s of r) { expect(s.end - s.start).toBeLessThanOrEqual(7); expect(s.text.length).toBeLessThanOrEqual(84); }
+    expect(r.map(s => s.text).join(' ')).toBe(ws.map(w => w[0].trim()).join(' '));
+  });
+
+  test('(2) balanced split prefers real word gaps and clause marks over the exact middle (pure)', () => {
+    // 24 words, a clear 0.4 s gap after word 9: break lands there, not at word 12.
+    const ws: { text: string; start: number; end: number }[] = []; let t = 0;
+    for (let i = 0; i < 24; i++) { ws.push({ text: ` w${String(i).padStart(2, '0')}xx`, start: t, end: t + 0.3 }); t += i === 9 ? 0.7 : 0.33; }
+    const pieces = splitBalanced(ws);
+    expect(pieces.length).toBe(2);
+    expect(pieces[0].length).toBe(10);
+    // Single over-long word never loops; one cue.
+    expect(splitBalanced([{ text: ' x'.repeat(60), start: 0, end: 9 }]).length).toBe(1);
+  });
+
+  test('(2) tiny fragments merge across a clause mark, never across a sentence end or a pause (pure)', () => {
+    expect(groupWordsIntoSegments(W5([[' Well', 0, 0.5], [' then', 0.5, 1.0], [' friends,', 1.0, 1.6], [' we', 1.7, 1.9], [' go.', 1.9, 2.2]]) as any, 10).map(s => s.text))
+      .toEqual(['Well then friends, we go.']);
+    expect(groupWordsIntoSegments(W5([[' Hi.', 0, 0.3], [' Go', 0.4, 0.6], [' now.', 0.6, 0.9]]) as any, 10).map(s => s.text)).toEqual(['Hi.', 'Go now.']);
+    expect(groupWordsIntoSegments(W5([[' We', 0, 0.3], [' went', 0.3, 0.6], [' home', 0.6, 0.9], [' to', 0.9, 1.1], [' rest,', 1.1, 1.6], [' then', 2.6, 2.9]]) as any, 10).map(s => s.text))
+      .toEqual(['We went home to rest,', 'then']); // 1 s pause keeps "then" apart
+    // A longer clause stays its own cue.
+    expect(groupWordsIntoSegments(W5([[' After', 0, 0.4], [' a', 0.4, 0.5], [' long', 0.5, 0.9], [' day,', 0.9, 1.6], [' everyone', 1.7, 2.2], [' went', 2.2, 2.5], [' home', 2.5, 2.9], [' early.', 2.9, 3.4]]) as any, 10).map(s => s.text))
+      .toEqual(['After a long day,', 'everyone went home early.']);
+  });
+
+  test('(3) speed note is measured and only on Higher accuracy (pure)', () => {
+    expect(WHISPER_MODELS.base.speedNote).toBe('about 2× slower');
+    expect(WHISPER_MODELS.tiny.speedNote).toBeUndefined();
   });
 });

@@ -4,7 +4,14 @@ import type { SubtitleToolStatus } from '../hooks/useSubtitleTools';
 import { MACOS_APP_DOWNLOAD_URL } from '../utils/gifPlan';
 import { WHISPER_MODELS, approxDownloadMB } from '../utils/whisperModels';
 
-const MB = { tiny: approxDownloadMB(WHISPER_MODELS.tiny), base: approxDownloadMB(WHISPER_MODELS.base) };
+const FULL_MB = { tiny: approxDownloadMB(WHISPER_MODELS.tiny), base: approxDownloadMB(WHISPER_MODELS.base) };
+const sizeText = (mb: number | null | undefined, full: number) => {
+  const v = mb ?? full;
+  return v === 0 ? 'downloaded' : `${v} MB download`;
+};
+/** Option text, e.g. "Higher accuracy · 80 MB download · about 2× slower". */
+export const modelOptionText = (k: 'tiny' | 'base', mb: number | null | undefined) =>
+  [WHISPER_MODELS[k].label, sizeText(mb, FULL_MB[k]), WHISPER_MODELS[k].speedNote].filter(Boolean).join(' · ');
 
 interface Props {
   hasVideo: boolean;
@@ -21,10 +28,12 @@ interface Props {
   /** Whisper model choice; omitted hides the picker. */
   model?: 'tiny' | 'base';
   onModelChange?: (m: 'tiny' | 'base') => void;
+  /** Real extra download (MB) per model given what's cached; null = unknown (full size shown). */
+  modelSizes?: { tiny: number | null; base: number | null };
 }
 
 /** #27 subtitle tools: Generate (swappable transcriber), SRT/VTT import + export, status. */
-const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, unavailableReason, status, onGenerate, onConfirmDownload, onCancel, onImport, onExport, onDismiss, model, onModelChange }) => {
+const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, unavailableReason, status, onGenerate, onConfirmDownload, onCancel, onImport, onExport, onDismiss, model, onModelChange, modelSizes }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const running = status.kind === 'running';
   const btn = 'p-1.5 rounded-md text-zinc-400 hover:text-sky-400 hover:bg-sky-900/30 disabled:opacity-30 transition-colors';
@@ -47,11 +56,11 @@ const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, una
           disabled={running}
           aria-label="Speech model for automatic subtitles"
           data-testid="subtitle-model"
-          title={`Speech model: Standard (about ${MB.tiny} MB, faster) or Higher accuracy (about ${MB.base} MB, slower). Each is downloaded once, only after you confirm.`}
+          title={`Speech model. Standard: ${sizeText(modelSizes?.tiny, FULL_MB.tiny)}, fastest. Higher accuracy: ${sizeText(modelSizes?.base, FULL_MB.base)}, ${WHISPER_MODELS.base.speedNote} to transcribe. Downloads happen once, only after you confirm.`}
           className="bg-transparent text-[10px] text-zinc-400 hover:text-sky-400 rounded px-0.5 py-1 border border-transparent hover:border-zinc-700 disabled:opacity-30"
         >
-          <option value="tiny">Standard</option>
-          <option value="base">Higher accuracy</option>
+          <option value="tiny">{modelOptionText('tiny', modelSizes?.tiny)}</option>
+          <option value="base">{modelOptionText('base', modelSizes?.base)}</option>
         </select>
       )}
       <button onClick={() => fileRef.current?.click()} className={btn} aria-label="Import subtitles (SRT/VTT)" title="Import subtitles from an .srt or .vtt file">

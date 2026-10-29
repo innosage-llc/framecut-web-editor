@@ -71,8 +71,10 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
       try { cached = await transcriber.download.isReady(); } catch { cached = false; }
       if (abortRef.current !== ctrl) return;
       if (!cached && !opts.confirmed) {
+        let mb = transcriber.download.approxMB;
+        try { if (transcriber.download.remainingMB) mb = await transcriber.download.remainingMB(); } catch {}
+        if (abortRef.current !== ctrl) return;
         release();
-        const mb = transcriber.download.approxMB;
         const which = transcriber.download.label === 'Higher accuracy' ? 'the higher-accuracy speech model' : 'a speech model';
         setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads ${which} (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
         return;
@@ -151,7 +153,19 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
   const setTimeoutMs = useCallback((ms: number) => { timeoutMsRef.current = ms; }, []);
 
   const model = getWhisperModel();
+  // Real extra download per model, given what's cached (shown in the picker); null = unknown.
+  const [modelSizes, setModelSizes] = useState<Record<WhisperModelKey, number | null>>({ tiny: null, base: null });
+  const refreshSizes = useCallback(async () => {
+    const d = getTranscriber().download;
+    if (!d?.remainingMB) { setModelSizes({ tiny: null, base: null }); return; }
+    try {
+      const [tiny, base] = await Promise.all([d.remainingMB('tiny'), d.remainingMB('base')]);
+      setModelSizes({ tiny, base });
+    } catch { setModelSizes({ tiny: null, base: null }); }
+  }, []);
+  useEffect(() => { refreshSizes(); }, [refreshSizes, status.kind, model]);
+  useEffect(() => subscribeTranscriber(() => { refreshSizes(); }), [refreshSizes]);
   const setModel = useCallback((k: WhisperModelKey) => setWhisperModel(k), []);
 
-  return { status, availability, model, setModel, generate, cancel, importFile, exportFile, dismiss, setTimeoutMs };
+  return { status, availability, model, setModel, modelSizes, refreshSizes, generate, cancel, importFile, exportFile, dismiss, setTimeoutMs };
 }

@@ -26,7 +26,9 @@ export interface TranscribeProgress { phase: 'download' | 'transcribe'; progress
 export interface Transcriber {
   readonly id: string;
   /** Present when the engine needs a one-time opt-in download before first use. */
-  download?: { approxMB: number; source: string; /** user-facing model name, e.g. 'Higher accuracy' */ label?: string; isReady(): Promise<boolean> };
+  download?: { approxMB: number; source: string; /** user-facing model name, e.g. 'Higher accuracy' */ label?: string; isReady(): Promise<boolean>;
+    /** Real extra download in MB for the current (or a named) model, given what is already cached. */
+    remainingMB?(model?: string): Promise<number> };
   /** Synchronous availability check; `reason` is user-facing copy when unavailable. */
   availability(): { available: true } | { available: false; reason: string };
   /** Optional cheap local check, run BEFORE any download prompt; false means no speech to transcribe. */

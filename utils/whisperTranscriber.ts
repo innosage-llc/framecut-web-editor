@@ -5,7 +5,7 @@
  * "no speech" without ever creating the worker or touching the network.
  */
 import { Transcriber, TranscriptSegment, createWorkerTranscriber, unavailableTranscriber } from './transcriber';
-import { WHISPER_MODELS, WhisperModelKey, approxDownloadMB } from './whisperModels';
+import { WHISPER_MODELS, WhisperModelKey, approxDownloadMB, listCachedUrls, missingFiles, sumBytes, bytesToMB } from './whisperModels';
 export { WHISPER_MODELS, approxDownloadMB } from './whisperModels';
 export type { WhisperModelKey } from './whisperModels';
 
@@ -24,24 +24,23 @@ export function setWhisperModel(k: WhisperModelKey) {
 export const subscribeWhisperModel = (l: () => void) => { modelListeners.add(l); return () => { modelListeners.delete(l); }; };
 
 export const WHISPER_MODEL_ID = WHISPER_MODELS.tiny.id;
-/** Files transformers.js fetches for dtype q8 (sizes from the Hub, Oct 2026). */
-export const WHISPER_MODEL_FILES = [
-  'config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json',
-  'onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx',
-];
 /** Standard model: 43.6 MB (q8 encoder 10.1 + merged decoder 30.7 + tokenizer/config 2.8) + 14.3 MB ONNX Runtime WASM. */
 export const WHISPER_APPROX_DOWNLOAD_MB = approxDownloadMB(WHISPER_MODELS.tiny); // 58
 export const WEB_TRANSCRIBE_LIMIT_SECONDS = 10 * 60;
 
+/** Absolute URL of the self-hosted ONNX Runtime wasm (the worker caches it under this key). */
+// Loaded lazily: the `?url` import only resolves under Vite (pure helpers here also run in Node specs).
+export const ortWasmAbsoluteUrl = async () => new URL((await import('./ortWasmUrl')).default, location.href).href;
+
+/** Bytes a run with this model would still download (0 = everything cached). */
+export async function remainingDownloadBytes(key: WhisperModelKey = 'tiny'): Promise<number> {
+  return sumBytes(missingFiles(WHISPER_MODELS[key], await listCachedUrls(), await ortWasmAbsoluteUrl()));
+}
+export const remainingDownloadMB = async (key: WhisperModelKey = 'tiny') => bytesToMB(await remainingDownloadBytes(key));
+
+/** Ready = nothing left to download for this model (model files AND the shared runtime). */
 export async function isWhisperModelCached(key: WhisperModelKey = 'tiny'): Promise<boolean> {
-  const id = WHISPER_MODELS[key].id;
-  try {
-    if (typeof caches === 'undefined') return false;
-    const cache = await caches.open('transformers-cache');
-    const keys = (await cache.keys()).map(r => r.url);
-    return ['onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx']
-      .every(f => keys.some(k => k.includes(`${id}/resolve/`) && k.endsWith(f)));
-  } catch { return false; }
+  return (await remainingDownloadBytes(key)) === 0;
 }
 
 /** Decode the media's audio to 16 kHz mono. Returns null when there is no decodable audio track. */
@@ -93,6 +92,8 @@ export interface WhisperDeps {
   makeWorker?: () => Worker;
   decodeAudio?: (src: string) => Promise<Float32Array | null>;
   isReady?: (model: WhisperModelKey) => Promise<boolean>;
+  /** MB still to download for a model (defaults to the Cache API check). */
+  remainingMB?: (model: WhisperModelKey) => Promise<number>;
   /** Model choice; defaults to the user's saved choice (getWhisperModel). */
   model?: () => WhisperModelKey;
 }
@@ -112,6 +113,7 @@ export function createWhisperTranscriber(deps: WhisperDeps = {}): Transcriber {
   };
   const model = deps.model ?? getWhisperModel;
   const isReady = deps.isReady ?? isWhisperModelCached;
+  const remaining = deps.remainingMB ?? (deps.isReady ? async (k: WhisperModelKey) => approxDownloadMB(WHISPER_MODELS[k]) : remainingDownloadMB);
   return {
     get id() { return `whisper-${model()}`; },
     download: {
@@ -119,6 +121,7 @@ export function createWhisperTranscriber(deps: WhisperDeps = {}): Transcriber {
       get label() { return WHISPER_MODELS[model()].label; },
       source: 'Hugging Face (huggingface.co)',
       isReady: () => isReady(model()),
+      remainingMB: (k?: WhisperModelKey) => remaining(k ?? model()),
     },
     availability: () => {
       const ok = typeof WebAssembly !== 'undefined' && typeof Worker !== 'undefined' && typeof OfflineAudioContext !== 'undefined';
