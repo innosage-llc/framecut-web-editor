@@ -11,14 +11,19 @@
 import { pipeline, env } from '@huggingface/transformers';
 import { groupWordsIntoSegments } from '../utils/whisperWords';
 import { WHISPER_MODELS, WhisperModelKey, createCombinedProgress, listCachedUrls, missingFiles, ORT_WASM_KEY, WHISPER_CACHE_NAME } from '../utils/whisperModels';
+import { chooseWhisperThreads, currentThreadEnv } from '../utils/whisperThreads';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
+import ortGlueUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url';
 
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 const onnx = (env.backends as any).onnx;
-onnx.wasm.wasmPaths = { wasm: ortWasmUrl };
-onnx.wasm.numThreads = 1; // single-threaded: the app is not cross-origin isolated (no SharedArrayBuffer)
+onnx.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortGlueUrl };
+// Multi-threaded only on a cross-origin-isolated page; otherwise exactly 1 (see utils/whisperThreads).
+const THREADS = chooseWhisperThreads(currentThreadEnv());
+onnx.wasm.numThreads = THREADS;
+console.info(`[whisper] ONNX Runtime WASM threads: ${THREADS}${THREADS === 1 ? ' (page not cross-origin isolated or single core)' : ''}`);
 const ORT_WASM_URL = new URL(ortWasmUrl, self.location.href).href;
 
 /**
