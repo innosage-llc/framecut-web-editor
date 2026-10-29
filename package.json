@@ -13,6 +13,7 @@
     "postversion": "git push && git push --tags"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
     "gifenc": "^1.0.3",
     "jszip": "^3.10.1",
     "lucide-react": "^0.555.0",

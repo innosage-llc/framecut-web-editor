@@ -34,6 +34,8 @@ interface ToolbarProps {
   showDebug: boolean;
   onScreenshot?: () => void;
   currentTimeRef: React.MutableRefObject<number>;
+  /** #27 subtitle tools group (generate / import / export). */
+  subtitleTools?: React.ReactNode;
 }
 
 // DIRECT-DOM CLOCK COMPONENT (High Performance)
@@ -57,7 +59,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   isPlaying, selection, hasVideo, isPolishing, onPlayPause, onStepFrame, onZoom, 
   onSplit, onCrop, onMagicPolish, onAutoZoom, onRemoveAutoZooms,
   autoZoomEnabled = true, onToggleAutoZoom, autoZoomSensitivity = 0.5, onAutoZoomSensitivity,
-  hasRecordingEvents, clickRipplesEnabled = true, onToggleClickRipples, onAutoSpotlight, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef
+  hasRecordingEvents, clickRipplesEnabled = true, onToggleClickRipples, onAutoSpotlight, onDelete, onDetachAudio, onToggleDebug, showDebug, onScreenshot, currentTimeRef, subtitleTools
 }) => {
   const isCropActive = selection?.type === 'crop';
 
@@ -83,6 +85,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
         >
             {isPolishing ? <Loader2 size={16} className="animate-spin text-purple-500" /> : <Sparkles size={16} />}
         </button>
+
+        {subtitleTools}
 
         {/* Click polish (#23): ripples + optional auto-spotlight from in-tab clicks only */}
         {(onToggleClickRipples || onAutoSpotlight) && (
