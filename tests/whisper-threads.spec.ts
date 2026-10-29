@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { chooseWhisperThreads, WHISPER_MAX_THREADS, LOW_MEMORY_MAX_THREADS } from '../utils/whisperThreads';
+import { chooseWhisperThreads, isFirefoxUA, WHISPER_MAX_THREADS, LOW_MEMORY_MAX_THREADS, FIREFOX_MAX_THREADS } from '../utils/whisperThreads';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +33,21 @@ test.describe('thread cap (pure)', () => {
   });
 });
 
+test('Firefox (Gecko) is capped at 2 threads; other browsers without deviceMemory are not', () => {
+  const iso = { isolated: true, sharedArrayBuffer: true };
+  expect(FIREFOX_MAX_THREADS).toBe(2);
+  expect(chooseWhisperThreads({ ...iso, hardwareConcurrency: 16, firefox: true })).toBe(2);
+  expect(chooseWhisperThreads({ ...iso, hardwareConcurrency: 3, firefox: true })).toBe(2);
+  expect(chooseWhisperThreads({ ...iso, hardwareConcurrency: 2, firefox: true })).toBe(1);
+  expect(chooseWhisperThreads({ isolated: false, sharedArrayBuffer: false, hardwareConcurrency: 16, firefox: true })).toBe(1);
+  expect(chooseWhisperThreads({ ...iso, hardwareConcurrency: 16, firefox: false })).toBe(4);
+  expect(isFirefoxUA('Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0')).toBe(true);
+  expect(isFirefoxUA('Mozilla/5.0 (Android 14; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0')).toBe(true);
+  expect(isFirefoxUA('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36')).toBe(false);
+  expect(isFirefoxUA('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/140.0 Mobile/15E148 Safari/605.1.15')).toBe(false);
+  expect(isFirefoxUA(undefined)).toBe(false);
+});
+
 test('Cloudflare Pages _headers: COOP same-origin + COEP credentialless on every path', () => {
   const raw = fs.readFileSync(path.join(__dirname, '..', 'public', '_headers'), 'utf8');
   const lines = raw.split(/\r?\n/);
@@ -57,12 +72,12 @@ test.describe('in the browser', () => {
       return {
         isolated: crossOriginIsolated, sab: typeof SharedArrayBuffer !== 'undefined',
         threads: (window as any).__FRAMECUT_E2E__.whisperThreads(), cores: navigator.hardwareConcurrency,
-        mem: (navigator as any).deviceMemory, display: el && getComputedStyle(el).display, inter,
+        mem: (navigator as any).deviceMemory, ua: navigator.userAgent, display: el && getComputedStyle(el).display, inter,
       };
     });
     expect(env.isolated).toBe(true);
     expect(env.sab).toBe(true);
-    expect(env.threads).toBe(chooseWhisperThreads({ isolated: true, sharedArrayBuffer: true, hardwareConcurrency: env.cores, deviceMemory: env.mem }));
+    expect(env.threads).toBe(chooseWhisperThreads({ isolated: true, sharedArrayBuffer: true, hardwareConcurrency: env.cores, deviceMemory: env.mem, firefox: isFirefoxUA(env.ua) }));
     expect(env.display).toBe('flex'); // cdn.tailwindcss.com ran under COEP credentialless
     expect(env.inter).toBeGreaterThan(0); // fonts.gstatic.com Inter face loaded
   });
