@@ -21,6 +21,7 @@ import { useSubtitleTools } from './hooks/useSubtitleTools';
 import SubtitleTools from './components/SubtitleTools';
 import { setTranscriber, createWorkerTranscriber, createStubWorker, installDefaultTranscriber } from './utils/transcriber';
 import { createWhisperTranscriber, ortWasmAbsoluteUrl } from './utils/whisperTranscriber';
+import { chooseWhisperThreads, currentThreadEnv } from './utils/whisperThreads';
 
 // #27: on-device Whisper is the default engine (opt-in download on first use).
 installDefaultTranscriber(createWhisperTranscriber());
@@ -191,6 +192,7 @@ const App: React.FC = () => {
       createStubWorker,
       createWhisperTranscriber,
       ortWasmUrl: ortWasmAbsoluteUrl,
+      whisperThreads: () => chooseWhisperThreads(currentThreadEnv()),
       setSubtitleGenerationTimeoutMs: (ms: number) => subtitleTools.setTimeoutMs(ms),
       updateSubtitle: (id: string, patch: Partial<Subtitle>) => {
         const sub = stateRef.current.subtitles.find(x => x.id === id);
