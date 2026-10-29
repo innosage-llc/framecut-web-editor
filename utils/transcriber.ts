@@ -25,6 +25,8 @@ export interface Transcriber {
   download?: { approxMB: number; source: string; isReady(): Promise<boolean> };
   /** Synchronous availability check; `reason` is user-facing copy when unavailable. */
   availability(): { available: true } | { available: false; reason: string };
+  /** Optional cheap local check, run BEFORE any download prompt; false means no speech to transcribe. */
+  hasSpeech?(req: TranscribeRequest): Promise<boolean>;
   transcribe(req: TranscribeRequest, signal: AbortSignal, onProgress?: (p: TranscribeProgress) => void): Promise<TranscriptSegment[]>;
 }
 

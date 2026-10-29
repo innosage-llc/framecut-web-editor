@@ -13,7 +13,7 @@ export const WHISPER_MODEL_FILES = [
   'onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx',
 ];
 /** ~41 MB model (q8 encoder 10.1 MB + merged decoder 30.7 MB + ~3 MB tokenizer/config) + ~14 MB ONNX Runtime WASM. */
-export const WHISPER_APPROX_DOWNLOAD_MB = 58;
+export const WHISPER_APPROX_DOWNLOAD_MB = 55;
 export const WEB_TRANSCRIBE_LIMIT_SECONDS = 10 * 60;
 
 export async function isWhisperModelCached(): Promise<boolean> {
@@ -73,6 +73,12 @@ export function createWhisperTranscriber(deps: WhisperDeps = {}): Transcriber {
   const makeWorker = deps.makeWorker ?? defaultWhisperWorker;
   const decode = deps.decodeAudio ?? decodeAudio16k;
   const inner = createWorkerTranscriber(makeWorker, { id: 'whisper-tiny' });
+  // Decoded audio is cached per source so the pre-prompt speech check doesn't decode twice.
+  let cached: { src: string; pcm: Float32Array | null } | null = null;
+  const getPcm = async (src: string) => {
+    if (cached?.src !== src) cached = { src, pcm: await decode(src) };
+    return cached.pcm;
+  };
   return {
     id: 'whisper-tiny',
     download: { approxMB: WHISPER_APPROX_DOWNLOAD_MB, source: 'Hugging Face (huggingface.co)', isReady: deps.isReady ?? isWhisperModelCached },
@@ -80,8 +86,12 @@ export function createWhisperTranscriber(deps: WhisperDeps = {}): Transcriber {
       const ok = typeof WebAssembly !== 'undefined' && typeof Worker !== 'undefined' && typeof OfflineAudioContext !== 'undefined';
       return ok ? { available: true } : unavailableTranscriber.availability();
     },
+    async hasSpeech(req) {
+      const pcm = await getPcm(req.mediaSrc);
+      return !!pcm && !isSilent(pcm);
+    },
     async transcribe(req, signal, onProgress) {
-      const pcm = await decode(req.mediaSrc);
+      const pcm = await getPcm(req.mediaSrc);
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
       if (!pcm || isSilent(pcm)) return [];
       const segs = await inner.transcribe({ ...req, audio: pcm }, signal, onProgress);
