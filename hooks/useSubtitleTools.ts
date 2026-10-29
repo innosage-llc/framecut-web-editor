@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExtendedEditorState, Subtitle } from '../types';
 import { getTranscriber, subscribeTranscriber } from '../utils/transcriber';
 import { replaceAutoSubtitles, segmentsToCues, cueToSubtitle, mapSourceSegmentsToTimeline } from '../utils/subtitleGeneration';
-import { WEB_TRANSCRIBE_LIMIT_SECONDS } from '../utils/whisperTranscriber';
+import { WEB_TRANSCRIBE_LIMIT_SECONDS, getWhisperModel, setWhisperModel, subscribeWhisperModel, WhisperModelKey } from '../utils/whisperTranscriber';
 import { parseSubtitleFile, toSrt, toVtt } from '../utils/subtitleFormats';
 
 export type SubtitleToolStatus =
@@ -36,6 +36,7 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
   const timeoutMsRef = useRef(GENERATION_TIMEOUT_MS);
 
   useEffect(() => subscribeTranscriber(() => force(n => n + 1)), []);
+  useEffect(() => subscribeWhisperModel(() => force(n => n + 1)), []);
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const availability = getTranscriber().availability();
@@ -72,17 +73,20 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
       if (!cached && !opts.confirmed) {
         release();
         const mb = transcriber.download.approxMB;
-        setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads a speech model (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
+        const which = transcriber.download.label === 'Higher accuracy' ? 'the higher-accuracy speech model' : 'a speech model';
+        setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads ${which} (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
         return;
       }
     }
 
     setStatus({ kind: 'running', message: cached ? 'Loading speech model…' : 'Preparing audio…' });
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let shownPct = 0; // never let the download figure go backwards
     const onProgress = (p: { phase: 'download' | 'transcribe'; progress: number }) => {
       if (abortRef.current !== ctrl) return;
+      if (p.phase === 'download') shownPct = Math.max(shownPct, Math.min(100, Math.round((Number(p.progress) || 0) * 100)));
       setStatus({ kind: 'running', message: p.phase === 'download'
-        ? (cached ? 'Loading speech model…' : `Downloading speech model… ${Math.round(p.progress * 100)}%`)
+        ? (cached ? 'Loading speech model…' : `Downloading speech model… ${shownPct}%`)
         : 'Transcribing on your device…' });
     };
     try {
@@ -146,5 +150,8 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
   const dismiss = useCallback(() => setStatus({ kind: 'idle' }), []);
   const setTimeoutMs = useCallback((ms: number) => { timeoutMsRef.current = ms; }, []);
 
-  return { status, availability, generate, cancel, importFile, exportFile, dismiss, setTimeoutMs };
+  const model = getWhisperModel();
+  const setModel = useCallback((k: WhisperModelKey) => setWhisperModel(k), []);
+
+  return { status, availability, model, setModel, generate, cancel, importFile, exportFile, dismiss, setTimeoutMs };
 }

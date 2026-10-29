@@ -2,6 +2,9 @@ import React, { useRef } from 'react';
 import { Captions, FileUp, FileDown, Loader2, X } from 'lucide-react';
 import type { SubtitleToolStatus } from '../hooks/useSubtitleTools';
 import { MACOS_APP_DOWNLOAD_URL } from '../utils/gifPlan';
+import { WHISPER_MODELS, approxDownloadMB } from '../utils/whisperModels';
+
+const MB = { tiny: approxDownloadMB(WHISPER_MODELS.tiny), base: approxDownloadMB(WHISPER_MODELS.base) };
 
 interface Props {
   hasVideo: boolean;
@@ -15,10 +18,13 @@ interface Props {
   onImport: (file: File) => void;
   onExport: (format: 'srt' | 'vtt') => void;
   onDismiss: () => void;
+  /** Whisper model choice; omitted hides the picker. */
+  model?: 'tiny' | 'base';
+  onModelChange?: (m: 'tiny' | 'base') => void;
 }
 
 /** #27 subtitle tools: Generate (swappable transcriber), SRT/VTT import + export, status. */
-const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, unavailableReason, status, onGenerate, onConfirmDownload, onCancel, onImport, onExport, onDismiss }) => {
+const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, unavailableReason, status, onGenerate, onConfirmDownload, onCancel, onImport, onExport, onDismiss, model, onModelChange }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const running = status.kind === 'running';
   const btn = 'p-1.5 rounded-md text-zinc-400 hover:text-sky-400 hover:bg-sky-900/30 disabled:opacity-30 transition-colors';
@@ -34,6 +40,20 @@ const SubtitleTools: React.FC<Props> = ({ hasVideo, hasSubtitles, available, una
       >
         {running ? <Loader2 size={16} className="animate-spin text-sky-400" /> : <Captions size={16} />}
       </button>
+      {model && onModelChange && (
+        <select
+          value={model}
+          onChange={(e) => onModelChange(e.target.value === 'base' ? 'base' : 'tiny')}
+          disabled={running}
+          aria-label="Speech model for automatic subtitles"
+          data-testid="subtitle-model"
+          title={`Speech model: Standard (about ${MB.tiny} MB, faster) or Higher accuracy (about ${MB.base} MB, slower). Each is downloaded once, only after you confirm.`}
+          className="bg-transparent text-[10px] text-zinc-400 hover:text-sky-400 rounded px-0.5 py-1 border border-transparent hover:border-zinc-700 disabled:opacity-30"
+        >
+          <option value="tiny">Standard</option>
+          <option value="base">Higher accuracy</option>
+        </select>
+      )}
       <button onClick={() => fileRef.current?.click()} className={btn} aria-label="Import subtitles (SRT/VTT)" title="Import subtitles from an .srt or .vtt file">
         <FileUp size={15} />
       </button>

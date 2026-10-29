@@ -445,6 +445,8 @@ const App: React.FC = () => {
               onImport={subtitleTools.importFile}
               onExport={subtitleTools.exportFile}
               onDismiss={subtitleTools.dismiss}
+              model={subtitleTools.model}
+              onModelChange={subtitleTools.setModel}
             />
           }
         />

@@ -9,7 +9,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { isSilent, cleanWhisperSegments } from '../utils/whisperTranscriber';
 import { mapSourceSegmentsToTimeline, fitCuesAroundManual, segmentsToCues, replaceAutoSubtitles, MIN_FITTED_CUE_SECONDS } from '../utils/subtitleGeneration';
-import { groupWordsIntoSegments } from '../utils/whisperWords';
+import { groupWordsIntoSegments, chooseFallbackBreak } from '../utils/whisperWords';
+import { WHISPER_MODELS, approxDownloadMB, modelBytes, createCombinedProgress } from '../utils/whisperModels';
 import { parseSrt, parseVtt, toSrt, toVtt, parseSubtitleFile, formatCueTime, parseCueTime } from '../utils/subtitleFormats';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -179,7 +180,7 @@ test.describe('#27 subtitle tools in the editor', () => {
     await expect(generateBtn(page)).toHaveAttribute('data-available', 'true');
     await generateBtn(page).click();
     await expect(status(page)).toHaveAttribute('data-kind', 'confirm-download');
-    await expect(status(page)).toContainText('speech model (about 55 MB)');
+    await expect(status(page)).toContainText('speech model (about 58 MB)'); // measured: 43.6 MB model + 14.3 MB ONNX Runtime
     await expect(status(page)).toContainText('cached in your browser');
     await expect(status(page)).toContainText('English is officially supported');
     await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toBeVisible();
@@ -685,5 +686,127 @@ test.describe('#27 fix round 3: word-accurate trims, cached-model status, no aut
     await expect(status(page)).toHaveAttribute('data-kind', 'done');
     const seen: string[] = await page.evaluate(() => (window as any).__statuses);
     expect(seen.filter(t => /Loading speech model/.test(t))).toEqual([]);
+  });
+});
+
+test.describe('#27 fix round 4: combined progress, clause-aligned cues, higher-accuracy model', () => {
+  const at = (ws: { text: string; timestamp: [number, number] }[], o: number) => ws.map(w => ({ text: w.text, timestamp: [w.timestamp[0] + o, w.timestamp[1] + o] as [number, number] }));
+
+  test('(1) combined progress over the whole model manifest never goes backwards (pure)', () => {
+    const m = WHISPER_MODELS.tiny;
+    const p = createCombinedProgress(m);
+    const seen: number[] = [];
+    // transformers.js discovery order: small configs reach 100% each, then the big files start.
+    seen.push(p('config.json', 2248), p('Xenova/whisper-tiny/tokenizer.json', 2480466), p('onnx/encoder_model_quantized.onnx', 1));
+    seen.push(p('onnx/encoder_model_quantized.onnx', 5e6), p('onnx/decoder_model_merged_quantized.onnx', 1e6), p('onnx/encoder_model_quantized.onnx', 3e6) /* stale event */);
+    for (const [f, n] of Object.entries(m.files)) seen.push(p(f, n));
+    seen.push(p('unknown.bin', 9e9));
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThanOrEqual(seen[i - 1]);
+    expect(seen[2]).toBeLessThan(0.07); // tokenizer done is ~6%, not 100%
+    expect(seen[seen.length - 1]).toBe(1);
+  });
+
+  test('(1) in the editor: the download % shown only ever rises, even if the engine reports it falling', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    await page.evaluate(() => {
+      const w = window as any; w.__statuses = [];
+      const src = `self.onmessage = (e) => { const m = e.data; if (m.type !== 'transcribe') return;
+        const ps = [1, 0.15, 0.4, 1, 0.34, 0.9, 1]; let i = 0;
+        const t = setInterval(() => { if (i < ps.length) { self.postMessage({ type: 'progress', id: m.id, phase: 'download', progress: ps[i++] }); return; }
+          clearInterval(t); self.postMessage({ type: 'result', id: m.id, segments: [{ start: 1, end: 2, text: 'hi' }] }); }, 60); };`;
+      const E = w.__FRAMECUT_E2E__;
+      E.setTranscriber(E.createWhisperTranscriber({
+        makeWorker: () => new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))),
+        isReady: async () => false,
+        decodeAudio: async () => { const a = new Float32Array(16000); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i / 5) * 0.3; return a; },
+      }));
+      new MutationObserver(() => { const el = document.querySelector('[data-testid="subtitle-status"]'); if (el) w.__statuses.push(el.textContent); })
+        .observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await generateBtn(page).click();
+    await page.getByRole('button', { name: 'Download model and generate subtitles' }).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    const pcts = (await page.evaluate(() => (window as any).__statuses as string[]))
+      .map(t => /Downloading speech model… (\d+)%/.exec(t)?.[1]).filter(Boolean).map(Number);
+    expect(pcts.length).toBeGreaterThan(0);
+    for (let i = 1; i < pcts.length; i++) expect(pcts[i]).toBeGreaterThanOrEqual(pcts[i - 1]);
+    expect(pcts).not.toContain(15);
+  });
+
+  test('(2) cues break at sentences and clauses, not mid-clause (real JFK words, x3) (pure)', () => {
+    const segs = groupWordsIntoSegments([...at(JFK_WORDS, 0), ...at(JFK_WORDS, 11), ...at(JFK_WORDS, 22)] as any, 33);
+    const lines = ['And so my fellow Americans ask not', 'what your country can do for you,', 'ask what you can do for your country.'];
+    expect(segs.map(s => s.text)).toEqual([...lines, ...lines, ...lines]);
+    expect(segs.every(s => s.end - s.start <= 7)).toBe(true);
+    // The old 7 s cap split "…your country can do" | "for you, ask…": never again.
+    expect(segs.some(s => /can do$/.test(s.text))).toBe(false);
+  });
+
+  test('(2) short clauses stay together; the 7 s / 84-char cap is only a fallback at the best pause (pure)', () => {
+    const words = (spec: [string, number, number][]) => spec.map(([text, a, b]) => ({ text, timestamp: [a, b] as [number, number] }));
+    // A comma early in a short sentence does not break it.
+    expect(groupWordsIntoSegments(words([[' Yes,', 0, 0.4], [' I', 0.5, 0.6], [' think', 0.6, 0.9], [' so.', 0.9, 1.2]]) as any, 5).map(s => s.text)).toEqual(['Yes, I think so.']);
+    // One 9 s clause with no punctuation: split once, at the clear 0.5 s pause (after "seven"), not mid-run.
+    const run: [string, number, number][] = [];
+    let t = 0;
+    for (const wd of ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve']) {
+      run.push([' ' + wd, t, t + 0.6]); t += wd === 'seven' ? 1.1 : 0.7;
+    }
+    const segs = groupWordsIntoSegments(words(run) as any, 20);
+    expect(segs.map(s => s.text)).toEqual(['one two three four five six seven', 'eight nine ten eleven twelve']);
+    // A comma inside an over-long run wins over a pause.
+    const cw = run.map(([a, b, c], i) => [i === 2 ? a + ',' : a, b, c] as [string, number, number]);
+    expect(chooseFallbackBreak(cw.map(([text, start, end]) => ({ text, start, end })))).toBe(3);
+    // A pause > 0.8 s always breaks.
+    expect(groupWordsIntoSegments(words([[' a', 0, 0.3], [' b', 1.2, 1.5]]) as any, 5).map(s => s.text)).toEqual(['a', 'b']);
+  });
+
+  test('(3) model catalogue: measured sizes and licenses (pure)', () => {
+    expect(WHISPER_MODELS.tiny.id).toBe('Xenova/whisper-tiny');
+    expect(WHISPER_MODELS.base.id).toBe('Xenova/whisper-base');
+    expect(modelBytes(WHISPER_MODELS.tiny)).toBe(43622127);
+    expect(modelBytes(WHISPER_MODELS.base)).toBe(79677901);
+    expect(approxDownloadMB(WHISPER_MODELS.tiny)).toBe(58);
+    expect(approxDownloadMB(WHISPER_MODELS.base)).toBe(94);
+    expect([WHISPER_MODELS.tiny.license, WHISPER_MODELS.base.license]).toEqual(['Apache-2.0', 'Apache-2.0']);
+  });
+
+  async function modelEngine(page: Page) {
+    await page.evaluate(() => {
+      const w = window as any; w.__models = []; w.__readyAsked = [];
+      const src = `self.onmessage = (e) => { const m = e.data; if (m.type !== 'transcribe') return;
+        self.postMessage({ type: 'result', id: m.id, segments: [{ start: 1, end: 2, text: 'model=' + m.request.model }] }); };`;
+      const E = w.__FRAMECUT_E2E__;
+      E.setTranscriber(E.createWhisperTranscriber({
+        makeWorker: () => new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))),
+        isReady: async (k: string) => { w.__readyAsked.push(k); return false; },
+        decodeAudio: async () => { const a = new Float32Array(16000); for (let i = 0; i < a.length; i++) a[i] = Math.sin(i / 5) * 0.3; return a; },
+      }));
+    });
+  }
+
+  test('(3) "Higher accuracy" is opt-in: own size warning (94 MB), runs whisper-base, choice is remembered', async ({ page, baseURL }) => {
+    await setup(page, baseURL!, FIXTURE, 60);
+    const picker = page.getByTestId('subtitle-model');
+    await expect(picker).toHaveValue('tiny'); // Standard by default
+    await modelEngine(page);
+    await generateBtn(page).click();
+    await expect(status(page)).toContainText('a speech model (about 58 MB)');
+    await page.getByRole('button', { name: 'Not now' }).click();
+
+    await picker.selectOption('base');
+    await generateBtn(page).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'confirm-download');
+    await expect(status(page)).toContainText('the higher-accuracy speech model (about 94 MB)');
+    await expect(page.getByRole('button', { name: 'Download model and generate subtitles' })).toHaveText(/Download 94 MB/);
+    await page.getByRole('button', { name: 'Download model and generate subtitles' }).click();
+    await expect(status(page)).toHaveAttribute('data-kind', 'done');
+    expect((await subs(page)).map(x => x.text)).toEqual(['model=base']);
+    expect(await page.evaluate(() => (window as any).__readyAsked)).toEqual(['tiny', 'base', 'base']);
+    expect(await page.evaluate(() => localStorage.getItem('framecut-whisper-model'))).toBe('base');
+    expect(unexpected.filter(u => MODELISH.test(u))).toEqual([]);
+
+    await picker.selectOption('tiny');
+    expect(await page.evaluate(() => localStorage.getItem('framecut-whisper-model'))).toBe('tiny');
   });
 });

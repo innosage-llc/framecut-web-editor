@@ -10,9 +10,9 @@
  */
 import { pipeline, env } from '@huggingface/transformers';
 import { groupWordsIntoSegments } from '../utils/whisperWords';
+import { WHISPER_MODELS, WhisperModelKey, createCombinedProgress } from '../utils/whisperModels';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 
-export const WHISPER_MODEL_ID = 'Xenova/whisper-tiny';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
@@ -20,7 +20,7 @@ const onnx = (env.backends as any).onnx;
 onnx.wasm.wasmPaths = { wasm: ortWasmUrl };
 onnx.wasm.numThreads = 1; // app is not cross-origin isolated; avoid SharedArrayBuffer
 
-let asr: Promise<any> | null = null;
+const asr: Partial<Record<WhisperModelKey, Promise<any>>> = {};
 
 self.onmessage = async (e: MessageEvent) => {
   const m = e.data;
@@ -29,29 +29,28 @@ self.onmessage = async (e: MessageEvent) => {
   try {
     const audio: Float32Array = m.request.audio;
     if (!audio || audio.length === 0) { post({ type: 'result', segments: [] }); return; }
-    const loaded: Record<string, number> = {};
-    const total: Record<string, number> = {};
-    asr ??= pipeline('automatic-speech-recognition', WHISPER_MODEL_ID, {
+    const key: WhisperModelKey = m.request.model === 'base' ? 'base' : 'tiny';
+    const model = WHISPER_MODELS[key];
+    const combined = createCombinedProgress(model);
+    asr[key] ??= pipeline('automatic-speech-recognition', model.id, {
       dtype: 'q8',
       device: 'wasm',
       progress_callback: (p: any) => {
-        if (p?.status === 'progress' && p.file) {
-          loaded[p.file] = p.loaded ?? 0; total[p.file] = p.total ?? 0;
-          const L = Object.values(loaded).reduce((a, b) => a + b, 0);
-          const T = Object.values(total).reduce((a, b) => a + b, 0);
-          if (T > 0) post({ type: 'progress', phase: 'download', progress: L / T, loadedBytes: L });
-        }
+        if (p?.status === 'progress' && p.file) post({ type: 'progress', phase: 'download', progress: combined(p.file, p.loaded ?? 0) });
       },
     });
-    const transcriber = await asr;
+    const transcriber = await asr[key];
     post({ type: 'progress', phase: 'transcribe', progress: 0 });
     // No `language`: Whisper auto-detects. Word timestamps (same model files, cross-attention
     // alignment) let FrameCut cut cues into subtitle-sized lines and trim text with the timing.
+    // Decoding settings were measured on the JFK sample (clean, x3, noisy) in Oct 2026: forcing
+    // language 'en', num_beams 3, stride 3 s or 20 s chunks gave no gain (or a loss), and
+    // no_repeat_ngram_size 3 broke legitimately repeated phrases (WER 0% → 15%), so defaults stay.
     const out = await transcriber(audio, { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' });
     const segments = groupWordsIntoSegments(out?.chunks ?? [], audio.length / 16000);
     post({ type: 'result', segments });
   } catch (err: any) {
-    asr = null;
+    delete asr[m.request?.model === 'base' ? 'base' : 'tiny'];
     post({ type: 'error', message: err?.message || String(err) });
   }
 };
