@@ -52,20 +52,29 @@ export function useSubtitleTools({ setState, stateRef, pushHistory, recalculateD
     }
     const avail = transcriber.availability();
     if ('reason' in avail) { setStatus({ kind: 'unavailable', message: avail.reason }); return; }
+    // Claim the run before any await, so a double-click or Cancel during 'Checking audio…' is handled.
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const release = () => { if (abortRef.current === ctrl) abortRef.current = null; };
     if (transcriber.hasSpeech) {
       setStatus({ kind: 'running', message: 'Checking audio…' });
       let speech = true;
       try { speech = await transcriber.hasSpeech({ mediaSrc: s.mainVideo.src, duration: mediaDuration }); } catch { speech = true; }
-      if (!speech) { setStatus({ kind: 'empty', message: 'No speech found. Existing subtitles were left unchanged.' }); return; }
+      if (abortRef.current !== ctrl) return; // cancelled while checking; cancel() already reset status
+      if (!speech) { release(); setStatus({ kind: 'empty', message: 'No speech found. Existing subtitles were left unchanged.' }); return; }
     }
-    if (transcriber.download && !opts.confirmed && !(await transcriber.download.isReady())) {
-      const mb = transcriber.download.approxMB;
-      setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads a speech model (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
-      return;
+    if (transcriber.download && !opts.confirmed) {
+      let ready = false;
+      try { ready = await transcriber.download.isReady(); } catch { ready = false; }
+      if (abortRef.current !== ctrl) return;
+      if (!ready) {
+        release();
+        const mb = transcriber.download.approxMB;
+        setStatus({ kind: 'confirm-download', approxMB: mb, message: `Automatic subtitles run on your device. The first time, FrameCut downloads a speech model (about ${mb} MB) from ${transcriber.download.source}. It's cached in your browser afterwards, and your video never leaves your device. ${LANGUAGE_COPY}` });
+        return;
+      }
     }
 
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
     setStatus({ kind: 'running', message: 'Preparing audio…' });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onProgress = (p: { phase: 'download' | 'transcribe'; progress: number }) => {
