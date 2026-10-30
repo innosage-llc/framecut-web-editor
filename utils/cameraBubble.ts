@@ -101,13 +101,13 @@ const shapePath = (ctx: CanvasRenderingContext2D, shape: CameraBubbleShape, x: n
 /** Draw the bubble (cover-fit camera frame, clipped to the shape, then the border). */
 export const drawCameraBubble = (
   ctx: CanvasRenderingContext2D,
-  source: CanvasImageSource & { videoWidth?: number; videoHeight?: number },
+  source: CanvasImageSource & { videoWidth?: number; videoHeight?: number; displayWidth?: number; displayHeight?: number },
   bubble: CameraBubble,
   canvasW: number,
   canvasH: number,
 ) => {
-  const sw = source.videoWidth || (source as any).width || 0;
-  const sh = source.videoHeight || (source as any).height || 0;
+  const sw = source.videoWidth || source.displayWidth || (source as any).width || 0;
+  const sh = source.videoHeight || source.displayHeight || (source as any).height || 0;
   if (!sw || !sh) return false;
   const r = bubbleRect(bubble, canvasW, canvasH);
   // Cover-fit the camera frame into the bubble.

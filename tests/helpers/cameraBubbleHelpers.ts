@@ -28,9 +28,9 @@ export async function boot(page: Page) {
   await page.waitForFunction(() => !!(window as any).__FRAMECUT_E2E__);
 }
 
-export async function loadWithCamera(page: Page, timeOffset: number, cameraDuration = 6) {
-  const s = fs.readFileSync(SCREEN).toString('base64');
-  const c = fs.readFileSync(CAMERA).toString('base64');
+export async function loadWithCamera(page: Page, timeOffset: number, cameraDuration = 6, screenPath = SCREEN, cameraPath = CAMERA) {
+  const s = fs.readFileSync(screenPath).toString('base64');
+  const c = fs.readFileSync(cameraPath).toString('base64');
   await page.evaluate(async ([s, c, timeOffset, cameraDuration]) => {
     const blob = (b64: string) => { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new Blob([u], { type: 'video/webm' }); };
     await (window as any).__FRAMECUT_E2E__.loadWithCamera(blob(s as string), [], 10, blob(c as string), timeOffset, cameraDuration);
@@ -63,3 +63,78 @@ export async function previewPixel(page: Page, [x, y]: [number, number]) {
     return Array.from(ctx.getImageData(Math.round(x / 100 * (c.width - 1)), Math.round(y / 100 * (c.height - 1)), 1, 1).data);
   }, [x, y] as const);
 }
+
+export const SCREEN_FI = 'tests/fixtures/e2e-screen-frameindex-10s.webm';
+export const CAMERA_FI = 'tests/fixtures/e2e-camera-frameindex-10s.webm';
+
+/** Split at 4 s, speed the left half to 2x, trim 1 s off the right half's head. */
+export async function applyLinkedEdits(page: Page) {
+  let s = await E2E(page);
+  const id = s.cameraBubbles[0].id;
+  await callApi(page, 'select', { type: 'clip', id });
+  await callApi(page, 'seek', 4);
+  await callApi(page, 'split');
+  s = await E2E(page);
+  const left = s.cameraBubbles.find((c: any) => c.sourceStart === 0);
+  await callApi(page, 'select', { type: 'clip', id: left.id });
+  await callApi(page, 'setSelectedSpeed', 2);
+  s = await E2E(page);
+  const right = s.cameraBubbles.find((c: any) => c.sourceStart > 0);
+  await callApi(page, 'updateClip', right.id, { sourceStart: right.sourceStart + 1 });
+  return (await E2E(page)).cameraBubbles;
+}
+
+/** Replaces AudioEncoder with a no-op: Linux Chromium/Chrome have no AAC encoder, so MP4 is video-only. */
+export const noAacShim = () => {
+  (window as any).AudioEncoder = class {
+    state = 'unconfigured';
+    constructor(_init: any) {}
+    configure() { this.state = 'configured'; }
+    encode(d: any) { d?.close?.(); }
+    async flush() {}
+    close() { this.state = 'closed'; }
+  };
+};
+
+export async function exportGif(page: Page) {
+  await page.getByRole('button', { name: /^Export/ }).first().click();
+  await page.getByTestId('export-menu-gif').click();
+  await page.getByLabel('GIF frame rate').selectOption('10');
+  await page.getByLabel('GIF max longest side').selectOption('480');
+  const gdl = page.waitForEvent('download', { timeout: 280_000 });
+  const t0 = Date.now();
+  await page.getByRole('button', { name: 'Export GIF' }).click();
+  const path = (await (await gdl).path())!;
+  return { path, seconds: (Date.now() - t0) / 1000 };
+}
+
+export async function exportMp4(page: Page) {
+  await page.getByRole('button', { name: /^Export/ }).first().click();
+  await page.getByRole('button', { name: /MP4/ }).first().click();
+  const settings = page.getByRole('button', { name: 'Export MP4' });
+  const dl = page.waitForEvent('download', { timeout: 280_000 });
+  let t0 = Date.now();
+  if (await settings.isVisible().catch(() => false)) { t0 = Date.now(); await settings.click(); }
+  const path = (await (await dl).path())!;
+  return { path, seconds: (Date.now() - t0) / 1000 };
+}
+
+/** Decode every GIF frame in the page; returns per-frame RGBA as base64. */
+export const decodeGifFrames = (page: Page, bytes: Buffer) => page.evaluate(async (b64) => {
+  const bin = atob(b64); const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  const dec = new (window as any).ImageDecoder({ data: u, type: 'image/gif' });
+  await dec.tracks.ready;
+  const count = dec.tracks.selectedTrack.frameCount;
+  const c = document.createElement('canvas');
+  const frames: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const { image } = await dec.decode({ frameIndex: i });
+    c.width = image.displayWidth; c.height = image.displayHeight;
+    const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height); ctx.drawImage(image, 0, 0); image.close();
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let s = ''; for (let k = 0; k < d.length; k += 0x8000) s += String.fromCharCode(...d.subarray(k, k + 0x8000));
+    frames.push(btoa(s));
+  }
+  return { count, w: c.width, h: c.height, frames };
+}, bytes.toString('base64'));

@@ -8,6 +8,9 @@ import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, calcu
 import PropertyHUD from './PropertyHUD';
 import { getActiveClickRipples, renderClickRipples } from '../utils/clickPolish';
 import { BackgroundFrame, isFrameActive, getFrameContentRect, drawWallpaper, drawFramedContent } from '../utils/backgroundFrame';
+import { CameraFrameSource, asVideoSource } from '../utils/cameraFrameSource';
+
+type ExportFrameSlot = { src: string; source: CameraFrameSource | null; ready: Promise<CameraFrameSource | null> };
 import { CameraBubble, normalizeBubble, drawCameraBubble, cameraMediaTime, bubbleRect, clampBubblePosition, CAMERA_BUBBLE_LIMITS } from '../utils/cameraBubble';
 import CameraBubbleControls from './CameraBubbleControls';
 
@@ -293,6 +296,11 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const cameraSrcRef = useRef(cameraSrc);
   cameraSrcRef.current = cameraSrc;
   const cameraTimingRef = useRef({ offset: cameraTimeOffset, duration: cameraDuration });
+  // #28 realtime export: decoded camera frames and the screen's presented frame time.
+  const cameraFrameSourceRef = useRef<ExportFrameSlot | null>(null);
+  const screenFrameSourceRef = useRef<ExportFrameSlot | null>(null);
+  const cameraExportFrameRef = useRef<VideoFrame | null>(null);
+  const screenExportFrameRef = useRef<VideoFrame | null>(null);
   cameraTimingRef.current = { offset: cameraTimeOffset, duration: cameraDuration };
 
   // Sync Props to Refs
@@ -881,8 +889,47 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
   const syncExportPlayback = async (sourceTime: number): Promise<void> => {
       await syncScreenExportPlayback(sourceTime);
-      // #28: the camera is seeked to the exact frame for every export frame (MP4 and GIF).
-      await syncCameraExact(currentTimeRef.current);
+      // #28: realtime export (MP4, screen in 'playback') picks the decoded camera frame matching the
+      // presented screen frame; non-realtime export (GIF, 'frame') seeks the exact camera frame.
+      if (exportPlaybackModeRef.current === 'playback') await syncCameraDecoded(currentTimeRef.current);
+      else await syncCameraExact(currentTimeRef.current);
+  };
+
+  /** Lazily decode a recording once for realtime export (null if WebCodecs/container unsupported). */
+  const frameSourceFor = async (slot: React.MutableRefObject<ExportFrameSlot | null>, src: string | null | undefined) => {
+      if (!src || src.startsWith('color:') || src.startsWith('image:')) return null;
+      let fs = slot.current;
+      if (!fs || fs.src !== src) {
+          fs?.source?.close();
+          fs = { src, source: null, ready: (async () => {
+              try { return await CameraFrameSource.create(await (await fetch(src)).blob()); } catch { return null; }
+          })() };
+          slot.current = fs;
+      }
+      if (!fs.source) fs.source = await fs.ready;
+      return fs.source;
+  };
+
+  /**
+   * #28 realtime export (MP4) with a camera bubble: both recordings are decoded once (WebCodecs) and
+   * the frames are picked by timestamp for this export frame — screen at the clip's source time,
+   * camera at the matching camera media time — so the bubble can't drift from the screen and no
+   * per-frame seek is needed. Falls back to the exact camera seek when decoding isn't available.
+   */
+  const syncCameraDecoded = async (time: number) => {
+      cameraExportFrameRef.current = null;
+      screenExportFrameRef.current = null;
+      const r = resolveCameraAt(time);
+      if (!r) return;
+      const cam = await frameSourceFor(cameraFrameSourceRef, cameraSrcRef.current);
+      const camFrame = cam ? await cam.frameAt(r.mediaTime) : null;
+      if (!camFrame) { await syncCameraExact(time); return; }
+      const screen = await frameSourceFor(screenFrameSourceRef, mainSrcRef.current);
+      const sourceTime = r.clip.sourceStart + (time - r.clip.offset) * r.clip.speed;
+      const screenFrame = screen ? await screen.frameAt(sourceTime) : null;
+      if (!screenFrame) { await syncCameraExact(time); return; }
+      cameraExportFrameRef.current = camFrame;
+      screenExportFrameRef.current = screenFrame;
   };
 
   const syncScreenExportPlayback = async (sourceTime: number): Promise<void> => {
@@ -944,6 +991,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
   const stopExportPlayback = () => {
       pauseAllExportVideos();
+      cameraExportFrameRef.current = null;
+      screenExportFrameRef.current = null;
+      for (const slot of [cameraFrameSourceRef, screenFrameSourceRef]) { slot.current?.source?.close(); slot.current = null; }
       exportPlaybackVideoRef.current = null;
       exportPlaybackModeRef.current = null;
   };
@@ -1018,7 +1068,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
     }
 
     const frameState = getFrameState(currentGlobalTime);
-    const video = frameState?.video || null;
+    const decodedScreen = renderForExport && exportPlaybackModeRef.current === 'playback' && frameState?.clip.mediaType === 'main'
+        ? screenExportFrameRef.current : null;
+    const video = (decodedScreen ? asVideoSource(decodedScreen) : frameState?.video) || null;
     const currentSrc = frameState?.src || null;
     const currentSourceTime = frameState?.sourceTime ?? null;
     const activeClipTiming = frameState ? { offset: frameState.clip.offset, sourceStart: frameState.clip.sourceStart, speed: frameState.clip.speed } : null;
@@ -1136,7 +1188,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
     }
 
     const camera = resolveCameraAt(currentGlobalTime);
-    if (camera && camera.cam.readyState >= 2 && !editingCrop && !isEditingZoomState) {
+    const decodedCam = isExportingRef.current && exportPlaybackModeRef.current === 'playback' ? cameraExportFrameRef.current : null;
+    if (camera && decodedCam && !editingCrop && !isEditingZoomState) {
+        drawCameraBubble(outerCtx, decodedCam, camera.bubble, canvas.width, canvas.height);
+    } else if (camera && camera.cam.readyState >= 2 && !editingCrop && !isEditingZoomState) {
         drawCameraBubble(outerCtx, camera.cam, camera.bubble, canvas.width, canvas.height);
     }
 
