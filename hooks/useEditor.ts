@@ -13,6 +13,24 @@ type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 
 
 // 定义存储键名 (必须与 useProjectPersistence 保持一致)
 const STORAGE_KEY = 'framecut-project-v1';
+
+/** Media asset keys whose saved `src` is a blob URL from the previous page (restored from IndexedDB later). */
+export const PERSISTED_ASSET_KEYS = ['intro', 'mainVideo', 'outro', 'audio', 'narration'] as const;
+
+/**
+ * A saved project's blob: URLs died with the page that created them. Clear them from the initial
+ * state so no element requests them (ERR_FILE_NOT_FOUND); useProjectPersistence then restores the
+ * media from IndexedDB with fresh URLs.
+ */
+export const withoutStaleBlobUrls = (parsed: any) => {
+    if (!parsed || typeof parsed !== 'object') return parsed;
+    const out = { ...parsed };
+    for (const key of PERSISTED_ASSET_KEYS) {
+        const a = out[key];
+        if (a && typeof a.src === 'string' && a.src.startsWith('blob:')) out[key] = { ...a, src: '' };
+    }
+    return out;
+};
 const PENDING_RESET_KEY = 'PENDING_RESET';
 
 // 提取默认状态，方便复用和重置
@@ -69,7 +87,7 @@ export const useEditor = () => {
         try {
             const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
-                const parsed = JSON.parse(saved);
+                const parsed = withoutStaleBlobUrls(JSON.parse(saved));
                 return { 
                     ...defaultState, 
                     ...parsed,

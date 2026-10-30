@@ -190,7 +190,8 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                             console.warn(`Failed to restore asset ${asset.name} from DB`, e);
                         }
                     }
-                    return asset; 
+                    // A saved blob: URL belonged to the previous page and can't load any more.
+                    return asset.src?.startsWith('blob:') ? { ...asset, src: '' } : asset;
                 };
 
                 // 并行恢复所有资源的 Blob URL

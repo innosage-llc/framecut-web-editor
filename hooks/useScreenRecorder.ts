@@ -141,6 +141,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           narrationTimeOffset: extras?.narration?.timeOffset ?? null,
           micSettings: micSettingsRef.current,
           micBlob: mic?.blob ?? null,
+          screenBlob: screen.blob,
           durationHint,
           eventCount: events.length,
           completedCount: ((window as any).__FRAMECUT_LAST_CAPTURE__?.completedCount ?? 0) + 1,
@@ -191,6 +192,8 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
         const device = micTrack?.getSettings?.() ?? {};
         const mono = createMonoMicStream(micStream);
         monoMicRef.current = mono;
+        // Start recording only once mono samples flow (media time 0 = start()).
+        if (mono) await mono.ready;
         micSettingsRef.current = {
           sampleRate: mono?.sampleRate ?? (device.sampleRate as number),
           channelCount: mono?.channelCount ?? (device.channelCount as number),

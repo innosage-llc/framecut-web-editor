@@ -92,7 +92,10 @@ test.describe('linked recording clips (unit)', () => {
       const A = await import('/utils/audioLanes.ts');
       const clip = { id: 'n', sourceStart: 0, sourceEnd: 10, offset: 0, speed: 1, mediaType: 'narration' };
       return {
-        late: C.companionTimeOffset({ requestedOffset: 0, startOffset: 0.1, stopOffset: 5 }, { requestedOffset: 0.02, startOffset: 0.15, stopOffset: 5 }),
+        // start events lagging by encoder latency (< LATE_START_S) don't move media time 0
+        encoderLag: C.companionTimeOffset({ requestedOffset: 0, startOffset: 0.1, stopOffset: 5 }, { requestedOffset: 0.02, startOffset: 0.15, stopOffset: 5 }),
+        // a source whose start event is far later really began late
+        late: C.companionTimeOffset({ requestedOffset: 0, startOffset: 0.1, stopOffset: 5 }, { requestedOffset: 0.02, startOffset: 0.6, stopOffset: 5 }),
         bogusScreenStart: C.companionTimeOffset({ requestedOffset: 0, startOffset: 5, stopOffset: 5 }, { requestedOffset: 0, startOffset: 0.05, stopOffset: 5 }),
         winLate: A.narrationWindow(clip, 0.25),
         winTrim: A.narrationWindow({ ...clip, sourceStart: 1, offset: 3, speed: 2 }, 0.25, 6),
@@ -101,8 +104,9 @@ test.describe('linked recording clips (unit)', () => {
         roles: ['main', 'intro', 'audio', 'narration'].map(m => A.audioRoleOf({ mediaType: m })),
       };
     });
-    expect(r.late).toBeCloseTo(0.05, 6);
-    expect(r.bogusScreenStart).toBeCloseTo(0.05, 6);
+    expect(r.encoderLag).toBeCloseTo(0.02, 6);
+    expect(r.late).toBeCloseTo(0.6, 6);
+    expect(r.bogusScreenStart).toBeCloseTo(0, 6);
     expect(r.winLate).toEqual({ when: 0.25, bufferOffset: 0, playDuration: 9.75 });
     expect(r.winTrim.when).toBeCloseTo(3, 6);
     expect(r.winTrim.bufferOffset).toBeCloseTo(0.75, 6);
@@ -420,7 +424,8 @@ test.describe('QA warnings', () => {
       const Orig = window.MediaRecorder;
       let fail = true;
       (window as any).MediaRecorder = class extends Orig {
-        start(t?: number) { if (fail) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
+        // Fail the screen recorder (the mic path also runs a throwaway encoder warm-up recorder).
+        start(t?: number) { if (fail && this.stream.getVideoTracks().length) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
       };
       const AC = window.AudioContext;
       (window as any).__contexts = [];
