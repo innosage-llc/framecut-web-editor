@@ -43,6 +43,9 @@ test(`narration lands within ${TOL_MS} ms of the screen audio in every one of ${
     const mic = page.getByRole('combobox', { name: 'Microphone' });
     await mic.selectOption(await mic.locator('option').nth(1).getAttribute('value') as string);
     await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    // A user takes a moment between picking the mic and pressing Record; the capture preflight
+    // (first capture in a page) runs then. Wait for it to settle (done or failed) as that time would.
+    await page.waitForFunction(() => ['done', 'failed'].includes((window as any).__FRAMECUT_PREFLIGHT__?.state), null, { timeout: 10000 });
     await page.getByRole('button', { name: 'Start Recording' }).click();
     await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2600 + (i % 3) * 300);

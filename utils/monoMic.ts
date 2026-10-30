@@ -25,9 +25,13 @@ export interface MonoMic {
 export const COLD_WARMUP_MS = 250;
 
 let warmed: Promise<void> | null = null;
+let warmPending = false;
+/** Forget a warm-up that was abandoned before it finished (its tracks were released). */
+export const abandonPendingWarmup = () => { if (warmPending) { warmed = null; warmPending = false; } };
 const warmUpAudioRecorder = (stream: MediaStream, force = false): Promise<void> => {
   if (warmed && !force) return warmed;
-  warmed = new Promise<void>((resolve) => {
+  warmPending = true;
+  const p: Promise<void> = new Promise<void>((resolve) => {
     let rec: MediaRecorder;
     try {
       const type = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
@@ -36,8 +40,12 @@ const warmUpAudioRecorder = (stream: MediaStream, force = false): Promise<void> 
     const done = () => { clearTimeout(timer); try { if (rec.state !== 'inactive') rec.stop(); } catch { /* ignore */ } rec.stream.getTracks().forEach(t => t.stop()); resolve(); };
     const timer = setTimeout(done, 3000);
     rec.onstart = done;
+    // An abandoned warm-up (its source released) must not hold anyone up.
+    stream.getTracks().forEach(t => t.addEventListener('ended', done, { once: true }));
     try { rec.start(); } catch { done(); }
   });
+  warmed = p.finally(() => { if (warmed === guarded) warmPending = false; });
+  const guarded = warmed;
   return warmed;
 };
 

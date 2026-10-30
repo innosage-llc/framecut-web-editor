@@ -1,3 +1,4 @@
+import { runCapturePreflight, cancelCapturePreflight } from '../utils/capturePreflight';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
@@ -119,6 +120,7 @@ export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
       meterRef.current.ctx.close().catch(() => {});
       meterRef.current = null;
     }
+    cancelCapturePreflight();
     micStreamRef.current?.getTracks().forEach(t => t.stop());
     micStreamRef.current = null;
     setMicLevel(0);
@@ -194,6 +196,8 @@ export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
         }
       });
       startMeter(stream);
+      // #28: warm the capture pipeline now (once per page), not after Record. Never awaited.
+      void runCapturePreflight(stream);
       await refresh();
       // The real id may not be listed (browser quirk): keep the generic entry selected then.
       setMics(list => {
