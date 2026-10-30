@@ -6,7 +6,7 @@ import { calculateZoomRect } from '../utils/canvasRenderer';
 import { linkedScreenClip } from '../utils/linkedRecordingClips';
 
 /** #28: a selected narration clip edits the whole recording through its linked screen clip. */
-const resolveLinkedSelection = (prev: ExtendedEditorState): ExtendedEditorState => {
+export const resolveLinkedSelection = (prev: ExtendedEditorState): ExtendedEditorState => {
     if (prev.selection?.type !== 'narration') return prev;
     const narration = (prev.narrationClips ?? []).find(c => c.id === prev.selection!.id);
     const screen = narration ? linkedScreenClip(narration, prev.clips) : undefined;

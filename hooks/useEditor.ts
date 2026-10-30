@@ -7,7 +7,7 @@ import { generateId } from '../utils';
 import { useHistory } from './useHistory';
 import { linkedCompanions } from '../utils/linkedRecordingClips';
 import type { AudioRole } from '../types';
-import { useClipOperations } from './useClipOperations';
+import { useClipOperations, resolveLinkedSelection } from './useClipOperations';
 
 type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'narration' | 'duration' | 'clips' | 'audioClips' | 'narrationClips' | 'mutedAudioRoles' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
 
@@ -334,15 +334,23 @@ export const useEditor = () => {
     }, []);
 
     const handleClipSpeedChange = useCallback((speed: number) => {
+        // #28: a narration selection changes the speed of its linked screen clip (the narration
+        // follows via recordingLinkID). Nothing to change → no undo step.
+        const cur = resolveLinkedSelection(stateRef.current);
+        const sel = cur.selection;
+        if (!sel || (sel.type !== 'clip' && sel.type !== 'audio')) return;
+        const target = (sel.type === 'audio' ? cur.audioClips : cur.clips).find(c => c.id === sel.id);
+        if (!target || target.speed === speed) return;
         pushHistory();
-        setState(prev => {
+        setState(original => {
+            const prev = resolveLinkedSelection(original);
             const { selection, clips, audioClips } = prev;
-            if (!selection) return prev;
+            if (!selection || (selection.type !== 'clip' && selection.type !== 'audio')) return original;
             const isAudio = selection.type === 'audio';
             const targetClips = isAudio ? audioClips : clips;
             const targetId = selection.id;
             const clipIndex = targetClips.findIndex(c => c.id === targetId);
-            if (clipIndex === -1) return prev;
+            if (clipIndex === -1) return original;
             const clip = targetClips[clipIndex];
             const oldDuration = (clip.sourceEnd - clip.sourceStart) / clip.speed;
             const newDuration = (clip.sourceEnd - clip.sourceStart) / speed;
@@ -358,7 +366,7 @@ export const useEditor = () => {
             const newClips = isAudio ? clips : newTrackClips;
             const newAudioClips = isAudio ? newTrackClips : audioClips;
             return {
-                ...prev,
+                ...original,
                 clips: newClips,
                 audioClips: newAudioClips,
                 duration: recalculateDuration(newClips, newAudioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects)

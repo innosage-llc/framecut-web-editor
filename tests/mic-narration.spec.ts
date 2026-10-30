@@ -315,3 +315,128 @@ test.describe('recording setup and capture (Chromium fake devices)', () => {
     await expect(page.getByTestId('lane-mute-narration')).toHaveCount(0);
   });
 });
+
+// ---- #28 QA (PR #48): first-time permission, empty undo step, blob URL rollback, mic leak ----
+
+/** Emulates a browser before permission: enumerateDevices hides ids/labels until getUserMedia succeeds. */
+const noPermissionYet = () => {
+  const md = navigator.mediaDevices;
+  const enumerate = md.enumerateDevices.bind(md);
+  const gum = md.getUserMedia.bind(md);
+  (window as any).__gum = [];
+  (window as any).__granted = { audio: false, video: false };
+  md.enumerateDevices = async () => {
+    const list = await enumerate();
+    const g = (window as any).__granted;
+    return list.map(d => {
+      const ok = d.kind === 'audioinput' ? g.audio : d.kind === 'videoinput' ? g.video : true;
+      return ok ? d : ({ deviceId: '', groupId: '', kind: d.kind, label: '', toJSON() { return this; } } as MediaDeviceInfo);
+    });
+  };
+  md.getUserMedia = async (c: any) => {
+    (window as any).__gum.push(JSON.parse(JSON.stringify(c)));
+    const s = await gum(c);
+    if (c?.audio) (window as any).__granted.audio = true;
+    if (c?.video) (window as any).__granted.video = true;
+    return s;
+  };
+};
+
+test.describe('setup without granted permission', () => {
+  test('mic: a generic "Microphone" entry asks for permission, then lists real devices', async ({ page }) => {
+    await boot(page, noPermissionYet);
+    const mic = page.getByRole('combobox', { name: 'Microphone' });
+    await expect.poll(() => mic.locator('option').allTextContents()).toEqual(['Off', 'Microphone']);
+    await expect(mic).toHaveValue('');
+    expect(await page.evaluate(() => (window as any).__gum.length)).toBe(0);
+    await mic.selectOption({ label: 'Microphone' });
+    await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    const calls = await page.evaluate(() => (window as any).__gum);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].audio.deviceId).toBeUndefined(); // default device, no stale exact id
+    // Re-enumerated with real ids and labels; the opened device is the selection.
+    await expect.poll(async () => (await mic.locator('option').allTextContents()).length).toBeGreaterThan(1);
+    const labels = await mic.locator('option').allTextContents();
+    expect(labels).not.toContain('Microphone');
+    expect(labels.length).toBeGreaterThan(2); // the real devices are listed
+    expect(await mic.inputValue()).not.toBe('');
+    const selected = await mic.locator('option:checked').textContent();
+    expect(selected).not.toBe('Microphone'); // a real device label
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('records with narration after a first-time permission grant', async ({ page }) => {
+    await boot(page, noPermissionYet);
+    const mic = page.getByRole('combobox', { name: 'Microphone' });
+    await mic.selectOption({ label: 'Microphone' });
+    await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    await page.getByRole('button', { name: 'Start Recording' }).click();
+    await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+    await page.getByRole('button', { name: 'Stop Sharing' }).click();
+    await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__?.getSnapshot().narrationClips.length > 0, null, { timeout: 15000 });
+  });
+});
+
+test.describe('QA warnings', () => {
+  test('speed with a narration clip selected changes the recording; a no-op adds no undo step', async ({ page }) => {
+    await boot(page);
+    await loadNarrated(page, 0);
+    let s = await E2E(page);
+    await callApi(page, 'select', { type: 'narration', id: s.narrationClips[0].id });
+    await callApi(page, 'setSelectedSpeed', 2);
+    s = await E2E(page);
+    expect(s.clips.find((c: any) => c.mediaType === 'main').speed).toBe(2);
+    expect(s.narrationClips[0].speed).toBe(2);
+    await callApi(page, 'setSelectedSpeed', 2); // nothing changes → no undo step
+    await callApi(page, 'undo');
+    s = await E2E(page);
+    expect(s.clips.find((c: any) => c.mediaType === 'main').speed).toBe(1);
+    expect(s.narrationClips[0].speed).toBe(1);
+    await callApi(page, 'undo'); // back past the import
+    expect((await E2E(page)).hasMainVideo).toBe(false);
+  });
+
+  test('failed import revokes every blob URL it created', async ({ page }) => {
+    await boot(page, () => {
+      const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+      (window as any).__urls = { created: [] as string[], revoked: [] as string[] };
+      URL.createObjectURL = (o: any) => { const u = create(o); (window as any).__urls.created.push(u); return u; };
+      URL.revokeObjectURL = (u: string) => { (window as any).__urls.revoked.push(u); revoke(u); };
+    });
+    await page.evaluate(() => { (window as any).__urls.created = []; (window as any).__urls.revoked = []; (window as any).__FRAMECUT_E2E_FAIL_IMPORT__ = true; });
+    await loadNarrated(page, 0, 1.0, false);
+    const u = await page.evaluate(() => (window as any).__urls);
+    expect(u.created.length).toBeGreaterThanOrEqual(2); // screen + narration
+    for (const url of u.created) expect(u.revoked).toContain(url);
+  });
+
+  test('a failed recorder start also stops the microphone (device tracks and Web Audio graph)', async ({ page }) => {
+    await boot(page, () => {
+      const md = navigator.mediaDevices;
+      const gum = md.getUserMedia.bind(md);
+      (window as any).__micStreams = [];
+      md.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.audio) (window as any).__micStreams.push(s); return s; };
+      const Orig = window.MediaRecorder;
+      let fail = true;
+      (window as any).MediaRecorder = class extends Orig {
+        start(t?: number) { if (fail) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
+      };
+      const AC = window.AudioContext;
+      (window as any).__contexts = [];
+      (window as any).AudioContext = class extends AC { constructor(o?: any) { super(o); (window as any).__contexts.push(this); } };
+    });
+    const mic = page.getByRole('combobox', { name: 'Microphone' });
+    await mic.selectOption(await mic.locator('option').nth(1).getAttribute('value') as string);
+    await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    await page.getByRole('button', { name: 'Start Recording' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__alerts.length)).toBe(1);
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => ({
+      liveMicTracks: (window as any).__micStreams.flatMap((s: MediaStream) => s.getTracks()).filter((t: MediaStreamTrack) => t.readyState === 'live').length,
+      openContexts: (window as any).__contexts.filter((c: AudioContext) => c.state !== 'closed').length,
+    }));
+    expect(r.liveMicTracks).toBe(0);
+    expect(r.openContexts).toBe(0);
+  });
+});

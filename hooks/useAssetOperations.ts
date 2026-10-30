@@ -289,9 +289,11 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
                     await storeAssetInDB(storageId, blobOrUrl);
                     stagedStorageIds.push(storageId);
                     url = URL.createObjectURL(blobOrUrl);
+                    stagedUrls.push(url);
                 } catch (e) {
                     console.error("Failed to store recording in DB", e);
                     url = URL.createObjectURL(blobOrUrl);
+                    stagedUrls.push(url);
                     storageId = undefined;
                 }
             } else {
