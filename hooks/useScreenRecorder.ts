@@ -40,6 +40,8 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
   const monoMicRef = useRef<MonoMic | null>(null);
   const cameraSettingsRef = useRef<{ width?: number; height?: number; frameRate?: number } | null>(null);
   const cameraEndedEarlyRef = useRef(false);
+  /** Identifies the live session; stale `ended` handlers from an earlier stream are ignored. */
+  const sessionStreamRef = useRef<MediaStream | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
   const recordingMarkersRef = useRef<number[]>([]);
   const recordingIntervalRef = useRef<any>(null);
@@ -112,6 +114,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
   const finishSession = useCallback(async () => {
     if (finishingRef.current) return;
     finishingRef.current = true;
+    sessionStreamRef.current = null;
     if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
     try {
       const result = await captureSession.stop();
@@ -155,6 +158,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           cameraEndedEarly: cameraEndedEarlyRef.current,
           durationHint,
           eventCount: events.length,
+          completedCount: ((window as any).__FRAMECUT_LAST_CAPTURE__?.completedCount ?? 0) + 1,
         };
       }
       const timestamp = new Date().toLocaleTimeString().replace(/:/g, '-');
@@ -166,11 +170,13 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
 
 
   const handleStartScreenRecording = async (options: StartRecordingOptions = {}) => {
+    let stream: MediaStream | null = null;
+    let micStream: MediaStream | null = null;
+    let cameraStream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       // #28: the microphone is opened after the screen picker (keeps the user-gesture for the picker).
       // If it fails, recording continues without narration and the user is told why.
-      let micStream: MediaStream | null = null;
       micSettingsRef.current = null;
       if (options.micDeviceId) {
         try {
@@ -179,7 +185,6 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           onNotice?.(describeMediaError(e, 'Microphone') + ' Recording without narration.');
         }
       }
-      let cameraStream: MediaStream | null = null;
       cameraSettingsRef.current = null;
       cameraEndedEarlyRef.current = false;
       if (options.cameraDeviceId) {
@@ -203,10 +208,10 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
         setRecordingDuration(d => d + 1);
       }, 1000);
 
-      stream.getVideoTracks()[0].onended = () => { void finishSession(); };
-
       // One session clock for every source (#28).
       const specs: CaptureSourceSpec[] = [{ id: 'screen', kind: 'video', stream }];
+      let onMicEnded: (() => void) | null = null;
+      let onCamEnded: (() => void) | null = null;
       if (micStream) {
         const micTrack = micStream.getAudioTracks()[0];
         const device = micTrack?.getSettings?.() ?? {};
@@ -219,10 +224,12 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           deviceChannelCount: device.channelCount as number | undefined,
         };
         // Disconnect: stop only the microphone; keep what it recorded; screen continues.
-        micTrack?.addEventListener('ended', () => {
+        const micSession = stream;
+        onMicEnded = () => {
+          if (sessionStreamRef.current !== micSession) return; // stale track from another session
           captureSession.stopSource('mic');
           onNotice?.('Microphone disconnected. Narration was kept up to that point; the screen is still recording.');
-        });
+        };
         specs.push({ id: 'mic', kind: 'audio', stream: mono?.stream ?? micStream });
       }
       if (cameraStream) {
@@ -230,18 +237,36 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
         const st = camTrack?.getSettings?.() ?? {};
         cameraSettingsRef.current = { width: st.width as number | undefined, height: st.height as number | undefined, frameRate: st.frameRate as number | undefined };
         // Disconnect: stop only the camera; it ends on its last frame and the bubble disappears after it.
-        camTrack?.addEventListener('ended', () => {
+        const camSession = stream;
+        onCamEnded = () => {
+          if (sessionStreamRef.current !== camSession) return; // stale track from another session
           cameraEndedEarlyRef.current = true;
           captureSession.stopSource('camera');
           onNotice?.('Camera disconnected. The camera bubble ends at its last frame; the screen is still recording.');
-        });
+        };
         specs.push({ id: 'camera', kind: 'video', stream: cameraStream });
       }
+      // start() tears everything down itself and throws if a recorder can't start.
       captureSession.start(specs);
+      const sessionStream = stream;
+      sessionStreamRef.current = sessionStream;
+      // Only the live session's stream may end it (a stale stream from a failed start must not).
+      stream.getVideoTracks()[0].onended = () => { if (sessionStreamRef.current === sessionStream) void finishSession(); };
+      if (onMicEnded) micStream?.getAudioTracks()[0]?.addEventListener('ended', onMicEnded);
+      if (onCamEnded) cameraStream?.getVideoTracks()[0]?.addEventListener('ended', onCamEnded);
       recordingStartTimeRef.current = performance.now();
       setIsScreenRecording(true);
     } catch (err: any) {
       console.error("Screen recording cancelled or failed", err);
+      // Never leave a live screen share behind after a failed start.
+      stream?.getTracks().forEach(t => { t.onended = null; try { t.stop(); } catch { /* ignore */ } });
+      sessionStreamRef.current = null;
+      // ...nor a live microphone (raw device tracks and the mono Web Audio graph).
+      monoMicRef.current?.close();
+      monoMicRef.current = null;
+      micStream?.getTracks().forEach(t => { try { t.stop(); } catch { /* ignore */ } });
+      // ...nor a live camera.
+      cameraStream?.getTracks().forEach(t => { try { t.stop(); } catch { /* ignore */ } });
       setIsScreenRecording(false);
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
       

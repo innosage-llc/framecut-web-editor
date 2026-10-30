@@ -88,3 +88,159 @@ test('screen recording records start offset, real mime type and re-based events'
   }
   expect(snap.recordingEvents.some((e: any) => e.type === 'click')).toBe(true);
 });
+
+// ---- #28 QA B1/W2: cleanup, double-stop and error paths ----
+
+const settle = (page: any) => page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 100))));
+const snap = async (page: any) => { await settle(page); return page.evaluate(() => (window as any).__FRAMECUT_E2E__.getSnapshot()); };
+
+/** Boot with every getDisplayMedia stream kept in window.__streams, and optional MediaRecorder faults. */
+async function bootCapture(page: any, faults: { startThrowsOnce?: boolean; ctorThrowsOnce?: boolean; stopIgnoredOnce?: boolean; slowCtorMs?: number } = {}) {
+  await page.addInitScript((faults: any) => {
+    (window as any).__FRAMECUT_E2E_ENABLED__ = true;
+    try { localStorage.removeItem('framecut-project-v1'); } catch {}
+    (window as any).__alerts = [];
+    window.alert = (m: any) => { (window as any).__alerts.push(String(m)); };
+    (window as any).__streams = [];
+    const md = navigator.mediaDevices;
+    const gdm = md.getDisplayMedia.bind(md);
+    md.getDisplayMedia = async (c: any) => { const s = await gdm(c); (window as any).__streams.push(s); return s; };
+    const Orig = window.MediaRecorder;
+    let startThrow = !!faults.startThrowsOnce, ctorThrow = !!faults.ctorThrowsOnce, stopIgnore = !!faults.stopIgnoredOnce;
+    class Faulty extends Orig {
+      constructor(s: MediaStream, o?: MediaRecorderOptions) {
+        if (ctorThrow) { ctorThrow = false; throw new DOMException('E2E: constructor failed', 'NotSupportedError'); }
+        super(s, o);
+        if (faults.slowCtorMs) { const t = performance.now(); while (performance.now() - t < faults.slowCtorMs) { /* busy */ } }
+      }
+      start(ts?: number) {
+        if (startThrow) { startThrow = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); }
+        return super.start(ts);
+      }
+      stop() {
+        if (stopIgnore) { stopIgnore = false; return; } // onstop never fires for this stop() call
+        return super.stop();
+      }
+    }
+    (window as any).MediaRecorder = Faulty;
+  }, faults);
+  await page.goto('/');
+  await page.waitForFunction(() => !!(window as any).__FRAMECUT_E2E__);
+}
+
+const liveTracks = (page: any, index?: number) => page.evaluate((index: number | undefined) => {
+  const streams: MediaStream[] = (window as any).__streams;
+  const list = index === undefined ? streams : [streams[index]];
+  return list.flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length;
+}, index);
+const endStream = (page: any, index: number) => page.evaluate((i: number) => {
+  const s: MediaStream = (window as any).__streams[i];
+  s.getTracks().forEach(t => { t.stop(); t.dispatchEvent(new Event('ended')); });
+}, index);
+
+async function record(page: any, ms: number) {
+  await page.getByRole('button', { name: 'Start Recording' }).click();
+  await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
+  await page.waitForTimeout(ms);
+}
+
+for (const fault of ['startThrowsOnce', 'ctorThrowsOnce'] as const) {
+  test(`failed recorder start (${fault}) stops every track; a stale ended neither hangs nor cuts the next recording`, async ({ page }) => {
+    await bootCapture(page, { [fault]: true });
+    await page.getByRole('button', { name: 'Start Recording' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__alerts.length)).toBe(1);
+    expect(await page.evaluate(() => (window as any).__alerts[0])).toMatch(/Failed to start screen recording/);
+    // Nothing of the failed attempt is still capturing.
+    expect(await liveTracks(page, 0)).toBe(0);
+    await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible();
+
+    // Retry; while it records, the failed attempt's stream fires `ended`: the new recording continues.
+    await record(page, 800);
+    await endStream(page, 0);
+    await page.waitForTimeout(1200);
+    await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible();
+    await page.getByRole('button', { name: 'Stop Sharing' }).click();
+    await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__.getSnapshot().hasMainVideo, null, { timeout: 15000 });
+    const cap = await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__);
+    expect(cap.durationHint).toBeGreaterThan(1.8);
+    expect(await liveTracks(page)).toBe(0);
+  });
+}
+
+test('Stop + track ended together: one clip, all tracks stopped', async ({ page }) => {
+  await bootCapture(page);
+  await record(page, 1500);
+  await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('Stop Sharing'))!;
+    btn.click();
+    const s: MediaStream = (window as any).__streams[0];
+    s.getVideoTracks().forEach(t => { t.stop(); t.dispatchEvent(new Event('ended')); });
+    btn.click();
+  });
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__.getSnapshot().hasMainVideo, null, { timeout: 15000 });
+  await page.waitForTimeout(800);
+  expect(await liveTracks(page)).toBe(0);
+  // Exactly one recording was completed and handed to the editor.
+  expect(await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__.completedCount)).toBe(1);
+});
+
+test('normal Stop stops every captured track (video and audio)', async ({ page }) => {
+  await bootCapture(page);
+  await record(page, 1200);
+  expect(await liveTracks(page, 0)).toBeGreaterThan(0);
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__.getSnapshot().hasMainVideo, null, { timeout: 15000 });
+  expect(await liveTracks(page, 0)).toBe(0);
+});
+
+test('a recorder whose onstop never fires does not hang Stop', async ({ page }) => {
+  await bootCapture(page, { stopIgnoredOnce: true });
+  await record(page, 1200);
+  const t0 = Date.now();
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__.getSnapshot().hasMainVideo, null, { timeout: 10000 });
+  expect(Date.now() - t0).toBeLessThan(8000);
+  await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeHidden();
+  expect(await liveTracks(page)).toBe(0);
+});
+
+test('events and markers are on the screen recording timeline (late recorder start, marker)', async ({ page }) => {
+  // A slow MediaRecorder constructor makes the screen recorder start ~0.4 s after the session clock.
+  await bootCapture(page, { slowCtorMs: 400 });
+  await record(page, 1000);
+  await page.getByRole('button', { name: /Marker/ }).click();
+  await page.waitForTimeout(300);
+  await page.mouse.click(400, 300);
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__.getSnapshot().hasMainVideo, null, { timeout: 15000 });
+  const cap = await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__);
+  const s = await snap(page);
+  expect(cap.sources[0].requestedOffset).toBeGreaterThan(0.3);
+  const clicks = s.recordingEvents.filter((e: any) => e.type === 'click');
+  expect(clicks.length).toBeGreaterThanOrEqual(2); // marker + mouse click
+  for (const e of s.recordingEvents) {
+    expect(e.time).toBeGreaterThanOrEqual(0);
+    // Re-based onto the recording: nothing can be later than the recording itself.
+    expect(e.time).toBeLessThanOrEqual(cap.durationHint + 0.02);
+  }
+  // The marker was pressed ~1 s into the recording (well under 1.4 s session time).
+  expect(clicks[0].time).toBeGreaterThan(0.5);
+  expect(clicks[0].time).toBeLessThan(cap.durationHint);
+});
+
+test("a finished session's stream firing ended later does not stop the next recording", async ({ page }) => {
+  await bootCapture(page);
+  await record(page, 1000);
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__.getSnapshot().hasMainVideo, null, { timeout: 15000 });
+  // Back to the landing screen (remove the recording), record again.
+  await page.locator('[title="Remove"]').first().click();
+  await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 5000 });
+  await record(page, 800);
+  await endStream(page, 0); // late `ended` from the first session's stream
+  await page.waitForTimeout(1200);
+  await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__.completedCount)).toBe(2);
+  expect(await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__.durationHint)).toBeGreaterThan(1.8);
+});

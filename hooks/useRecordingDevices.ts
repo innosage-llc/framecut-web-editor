@@ -8,8 +8,18 @@ import { cameraResolutionFor } from '../utils/cameraBubble';
  */
 export interface DeviceOption { deviceId: string; label: string; }
 
+/**
+ * Before permission is granted, browsers list devices with empty ids, so the setup offers one
+ * generic entry with this id. Picking it asks for permission on the system default device;
+ * the list is then refreshed with real devices and labels.
+ */
+export const DEFAULT_DEVICE_ID = 'default-device';
+
+const deviceIdConstraint = (deviceId: string): Pick<MediaTrackConstraints, 'deviceId'> =>
+  deviceId && deviceId !== DEFAULT_DEVICE_ID ? { deviceId: { exact: deviceId } } : {};
+
 export const MIC_CONSTRAINTS = (deviceId: string): MediaTrackConstraints => ({
-  deviceId: { exact: deviceId },
+  ...deviceIdConstraint(deviceId),
   // Same capture as the macOS app: mono, 48 kHz, unprocessed. Browser voice processing
   // (echo cancellation / noise suppression / AGC) is off: it is tuned for calls and can
   // suppress or pump narration (it silences Chromium's fake test tone entirely).
@@ -24,7 +34,7 @@ export const MIC_CONSTRAINTS = (deviceId: string): MediaTrackConstraints => ({
 export const CAMERA_CONSTRAINTS = (deviceId: string): MediaTrackConstraints => {
   const { width, height } = cameraResolutionFor((navigator as any).deviceMemory);
   return {
-    deviceId: { exact: deviceId },
+    ...deviceIdConstraint(deviceId),
     width: { ideal: width },
     height: { ideal: height },
     frameRate: { ideal: 30 },
@@ -48,9 +58,24 @@ export const describeMediaError = (e: any, device: 'Microphone' | 'Camera'): str
   }
 };
 
-const labelled = (list: MediaDeviceInfo[], kind: MediaDeviceKind, fallback: string): DeviceOption[] =>
-  list.filter(d => d.kind === kind && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+const labelled = (list: MediaDeviceInfo[], kind: MediaDeviceKind, fallback: string): DeviceOption[] => {
+  const ofKind = list.filter(d => d.kind === kind);
+  const real = ofKind.filter(d => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
     .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `${fallback} ${i + 1}` }));
+  // The system default (Chrome lists it as id 'default') keeps the generic entry's id, now with its real label.
+  const sysDefault = ofKind.find(d => d.deviceId === 'default' && d.label);
+  if (real.length > 0) return sysDefault ? [{ deviceId: DEFAULT_DEVICE_ID, label: sysDefault.label }, ...real] : real;
+  // No permission yet (ids are empty) or the browser hides devices until asked: offer the default.
+  return [{ deviceId: DEFAULT_DEVICE_ID, label: fallback }];
+};
+
+/** After permission on the default entry, select the real device that was opened (if listed). */
+const resolvedId = (stream: MediaStream, kind: 'audio' | 'video', fallback: string): string => {
+  const track = kind === 'audio' ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
+  const id = track?.getSettings?.().deviceId as string | undefined;
+  if (!id) return fallback;
+  return id === 'default' ? DEFAULT_DEVICE_ID : id;
+};
 
 export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
   const [mics, setMics] = useState<DeviceOption[]>([]);
@@ -78,12 +103,12 @@ export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
       setMics(nextMics);
       setCameras(nextCams);
       // A selected device that disappeared falls back to Off with a notice.
-      if (micIdRef.current && !nextMics.some(d => d.deviceId === micIdRef.current)) {
+      if (micIdRef.current && micIdRef.current !== DEFAULT_DEVICE_ID && !nextMics.some(d => d.deviceId === micIdRef.current)) {
         stopMeter();
         setMicId('');
         setMicError('Microphone disconnected. Pick another device or leave it Off.');
       }
-      if (cameraIdRef.current && !nextCams.some(d => d.deviceId === cameraIdRef.current)) {
+      if (cameraIdRef.current && cameraIdRef.current !== DEFAULT_DEVICE_ID && !nextCams.some(d => d.deviceId === cameraIdRef.current)) {
         cameraStreamRef.current?.getTracks().forEach(t => t.stop());
         setCameraStream(null);
         setCameraId('');
@@ -162,15 +187,25 @@ export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS(deviceId) });
       if (micIdRef.current !== deviceId) { stream.getTracks().forEach(t => t.stop()); return; }
       micStreamRef.current = stream;
+      // Picked the generic entry: adopt the real device id once permission revealed it.
+      const activeId = deviceId === DEFAULT_DEVICE_ID ? resolvedId(stream, 'audio', deviceId) : deviceId;
+      micIdRef.current = activeId;
+      setMicId(activeId);
       stream.getAudioTracks()[0]?.addEventListener('ended', () => {
-        if (micIdRef.current === deviceId) {
+        if (micIdRef.current === activeId) {
           stopMeter();
           setMicId('');
           setMicError('Microphone disconnected. Pick another device or leave it Off.');
         }
       });
       startMeter(stream);
-      refresh();
+      await refresh();
+      // The real id may not be listed (browser quirk): keep the generic entry selected then.
+      setMics(list => {
+        if (list.some(d => d.deviceId === micIdRef.current)) return list;
+        micIdRef.current = DEFAULT_DEVICE_ID; setMicId(DEFAULT_DEVICE_ID);
+        return list.some(d => d.deviceId === DEFAULT_DEVICE_ID) ? list : [{ deviceId: DEFAULT_DEVICE_ID, label: 'Microphone' }, ...list];
+      });
     } catch (e) {
       if (micIdRef.current === deviceId) {
         setMicId('');
@@ -189,15 +224,23 @@ export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS(deviceId) });
       if (cameraIdRef.current !== deviceId) { stream.getTracks().forEach(t => t.stop()); return; }
+      const activeId = deviceId === DEFAULT_DEVICE_ID ? resolvedId(stream, 'video', deviceId) : deviceId;
+      cameraIdRef.current = activeId;
+      setCameraId(activeId);
       stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-        if (cameraIdRef.current === deviceId) {
+        if (cameraIdRef.current === activeId) {
           setCameraStream(null);
           setCameraId('');
           setCameraError('Camera disconnected. Pick another device or leave it Off.');
         }
       });
       setCameraStream(stream);
-      refresh();
+      await refresh();
+      setCameras(list => {
+        if (list.some(d => d.deviceId === cameraIdRef.current)) return list;
+        cameraIdRef.current = DEFAULT_DEVICE_ID; setCameraId(DEFAULT_DEVICE_ID);
+        return list.some(d => d.deviceId === DEFAULT_DEVICE_ID) ? list : [{ deviceId: DEFAULT_DEVICE_ID, label: 'Camera' }, ...list];
+      });
     } catch (e) {
       if (cameraIdRef.current === deviceId) {
         setCameraId('');
