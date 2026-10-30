@@ -60,9 +60,6 @@ const CameraBubbleControls: React.FC<Props> = ({ bubble, onChange }) => {
         <span className="w-12">Colour</span>
         <input type="color" aria-label="Camera border colour" value={bubble.borderColor}
           onChange={e => set({ borderColor: e.target.value })} className="w-7 h-7 rounded border-0 p-0 bg-transparent" />
-        <label className="ml-auto flex items-center gap-1">
-          <input type="checkbox" aria-label="Mirror camera" checked={bubble.mirrored} onChange={e => set({ mirrored: e.target.checked })} /> Mirror
-        </label>
       </label>
     </div>
   );

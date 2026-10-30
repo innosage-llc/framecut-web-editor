@@ -19,7 +19,7 @@ test.describe('camera bubble geometry (unit)', () => {
         res: [B.cameraResolutionFor(8), B.cameraResolutionFor(4), B.cameraResolutionFor(undefined)],
       };
     });
-    expect(r.def).toEqual({ visible: true, x: 0.72, y: 0.65, size: 0.3, shape: 'circle', borderWidth: 0.004, borderColor: '#ffffff', mirrored: false });
+    expect(r.def).toEqual({ visible: true, x: 0.72, y: 0.65, size: 0.3, shape: 'circle', borderWidth: 0.004, borderColor: '#ffffff' });
     expect(r.circle.width).toBeCloseTo(324, 6); expect(r.circle.height).toBeCloseTo(324, 6);
     expect(r.circle.x).toBeCloseTo(0.72 * 1920, 6); expect(r.circle.y).toBeCloseTo(0.65 * 1080, 6);
     expect(r.rect.height / r.rect.width).toBeCloseTo(0.75, 6);
@@ -39,7 +39,7 @@ test.describe('camera bubble in the editor', () => {
     let s = await E2E(page);
     expect(s.camera).toMatchObject({ timeOffset: 0.5, duration: 6, stored: true });
     const main = s.cameraBubbles.find((c: any) => c.cameraBubble);
-    expect(main.cameraBubble).toEqual({ visible: true, x: 0.72, y: 0.65, size: 0.3, shape: 'circle', borderWidth: 0.004, borderColor: '#ffffff', mirrored: false });
+    expect(main.cameraBubble).toEqual({ visible: true, x: 0.72, y: 0.65, size: 0.3, shape: 'circle', borderWidth: 0.004, borderColor: '#ffffff' });
     expect(main.recordingLinkID).toBeTruthy();
     const centre = await bubbleCentre(page, main.cameraBubble);
 
@@ -183,12 +183,13 @@ test.describe('camera bubble in the editor', () => {
     expect((await E2E(page)).cameraBubbles[0].cameraBubble).toMatchObject({ x: 0.72, y: 0.65 });
 
     // Persisted: save, reload, the camera asset and the bubble come back.
-    await callApi(page, 'updateCameraBubble', id, { size: 0.42, mirrored: true });
+    await callApi(page, 'updateCameraBubble', id, { size: 0.42 });
     await page.getByTitle('Save Project (Browser Storage)').click();
     await page.waitForFunction(() => !!localStorage.getItem('framecut-project-v1'));
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('framecut-project-v1')!));
     expect(saved.camera?.storageId).toBeTruthy();
-    expect(saved.clips[0].cameraBubble).toMatchObject({ size: 0.42, mirrored: true });
+    expect(saved.clips[0].cameraBubble).toMatchObject({ size: 0.42 });
+    expect(saved.clips[0].cameraBubble).not.toHaveProperty('mirrored');
   });
 });
 

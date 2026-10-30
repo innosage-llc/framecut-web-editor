@@ -17,7 +17,6 @@ export interface CameraBubble {
   /** Border width as a fraction of the canvas's shorter side (0–0.03). */
   borderWidth: number;
   borderColor: string;
-  mirrored: boolean;
 }
 
 export const CAMERA_BUBBLE_LIMITS = {
@@ -33,7 +32,6 @@ export const DEFAULT_CAMERA_BUBBLE: CameraBubble = {
   shape: 'circle',
   borderWidth: 0.004,
   borderColor: '#ffffff',
-  mirrored: false,
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
@@ -53,6 +51,8 @@ export const bubbleRect = (bubble: CameraBubble, canvasW: number, canvasH: numbe
 };
 
 /** Normalise a (possibly partial / legacy) bubble: clamps every value into range. */
+// Never mirrored, like the macOS app (#64 has no mirror setting and captures unmirrored). A legacy
+// `mirrored` field from an older saved project is dropped here.
 export const normalizeBubble = (b: Partial<CameraBubble> | undefined | null): CameraBubble => {
   const m = { ...DEFAULT_CAMERA_BUBBLE, ...(b ?? {}) };
   const shape: CameraBubbleShape = m.shape === 'rounded' || m.shape === 'rect' ? m.shape : 'circle';
@@ -64,7 +64,6 @@ export const normalizeBubble = (b: Partial<CameraBubble> | undefined | null): Ca
     shape,
     borderWidth: clamp(m.borderWidth, CAMERA_BUBBLE_LIMITS.borderWidth.min, CAMERA_BUBBLE_LIMITS.borderWidth.max),
     borderColor: typeof m.borderColor === 'string' && m.borderColor ? m.borderColor : DEFAULT_CAMERA_BUBBLE.borderColor,
-    mirrored: !!m.mirrored,
   };
 };
 
@@ -121,10 +120,6 @@ export const drawCameraBubble = (
   shapePath(ctx, bubble.shape, r.x, r.y, r.width, r.height);
   ctx.save();
   ctx.clip();
-  if (bubble.mirrored) {
-    ctx.translate(r.x * 2 + r.width, 0);
-    ctx.scale(-1, 1);
-  }
   ctx.drawImage(source, sx, sy, cw, chh, r.x, r.y, r.width, r.height);
   ctx.restore();
   const border = bubble.borderWidth * Math.min(canvasW, canvasH);
