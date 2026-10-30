@@ -576,13 +576,13 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   };
 
   /** Seek the camera to the frame for `time` and wait until that frame is presented (export / stills). */
-  const syncCameraExact = async (time: number) => {
+  const syncCameraExact = async (time: number, timeoutMs = 500) => {
       const r = resolveCameraAt(time);
       if (!r) return;
       try { await waitForMediaReady(r.cam, 1); } catch { return; }
       // Hold the last frame up to the recorded duration (the element may report a shorter length).
       const end = Number.isFinite(r.cam.duration) && r.cam.duration > 0 ? r.cam.duration : Infinity;
-      await seekToPresentedFrame(r.cam, Math.min(r.mediaTime, Math.max(0, end - 0.001)));
+      await seekToPresentedFrame(r.cam, Math.min(r.mediaTime, Math.max(0, end - 0.001)), timeoutMs);
   };
 
   // --- MEDIA SYNC LOGIC ---
@@ -887,13 +887,6 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       return 'video';
   };
 
-  const syncExportPlayback = async (sourceTime: number): Promise<void> => {
-      await syncScreenExportPlayback(sourceTime);
-      // #28: realtime export (MP4, screen in 'playback') picks the decoded camera frame matching the
-      // presented screen frame; non-realtime export (GIF, 'frame') seeks the exact camera frame.
-      if (exportPlaybackModeRef.current === 'playback') await syncCameraDecoded(currentTimeRef.current);
-      else await syncCameraExact(currentTimeRef.current);
-  };
 
   /** Lazily decode a recording once for realtime export (null if WebCodecs/container unsupported). */
   const frameSourceFor = async (slot: React.MutableRefObject<ExportFrameSlot | null>, src: string | null | undefined) => {
@@ -911,25 +904,57 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   };
 
   /**
-   * #28 realtime export (MP4) with a camera bubble: both recordings are decoded once (WebCodecs) and
-   * the frames are picked by timestamp for this export frame — screen at the clip's source time,
-   * camera at the matching camera media time — so the bubble can't drift from the screen and no
-   * per-frame seek is needed. Falls back to the exact camera seek when decoding isn't available.
+   * #28 realtime export (MP4): the screen recording (and the camera, when its bubble is shown) is
+   * decoded once (WebCodecs) and this export frame's frames are picked by timestamp — screen at the
+   * clip's source time, camera at the matching camera media time. Frame-exact, with no per-frame
+   * seek, and independent of how far the playing <video> got. 'unavailable' when the clip isn't the
+   * screen recording or WebCodecs / the container (non-WebM, e.g. Safari MP4) can't decode it.
    */
-  const syncCameraDecoded = async (time: number) => {
+  const FALLBACK_SEEK_WAIT_MS = 150;
+  const syncDecodedFrames = async (time: number): Promise<'ok' | 'unavailable'> => {
       cameraExportFrameRef.current = null;
       screenExportFrameRef.current = null;
-      const r = resolveCameraAt(time);
-      if (!r) return;
-      const cam = await frameSourceFor(cameraFrameSourceRef, cameraSrcRef.current);
-      const camFrame = cam ? await cam.frameAt(r.mediaTime) : null;
-      if (!camFrame) { await syncCameraExact(time); return; }
+      const clip = findActiveClip(activeClipsRef.current, time);
+      if (!clip || clip.mediaType !== 'main') return 'unavailable';
       const screen = await frameSourceFor(screenFrameSourceRef, mainSrcRef.current);
-      const sourceTime = r.clip.sourceStart + (time - r.clip.offset) * r.clip.speed;
-      const screenFrame = screen ? await screen.frameAt(sourceTime) : null;
-      if (!screenFrame) { await syncCameraExact(time); return; }
-      cameraExportFrameRef.current = camFrame;
+      if (!screen) return 'unavailable';
+      const screenFrame = await screen.frameAt(clip.sourceStart + (time - clip.offset) * clip.speed);
+      if (!screenFrame) return 'unavailable';
+      const r = resolveCameraAt(time);
+      if (r) {
+          const cam = await frameSourceFor(cameraFrameSourceRef, cameraSrcRef.current);
+          const camFrame = cam ? await cam.frameAt(r.mediaTime) : null;
+          if (!camFrame) return 'unavailable';
+          cameraExportFrameRef.current = camFrame;
+      }
       screenExportFrameRef.current = screenFrame;
+      return 'ok';
+  };
+
+  const syncExportPlayback = async (sourceTime: number): Promise<void> => {
+      const time = currentTimeRef.current;
+      if (exportPlaybackModeRef.current !== 'playback') {
+          // Non-realtime export (GIF, 'frame'): exact seeks of the screen and the camera.
+          await syncScreenExportPlayback(sourceTime);
+          await syncCameraExact(time);
+          return;
+      }
+      if (await syncDecodedFrames(time) === 'ok') {
+          // Frames come from the decoders; the playing element only keeps the export paced.
+          await syncScreenExportPlayback(sourceTime);
+          return;
+      }
+      if (resolveCameraAt(time)) {
+          // No decoder (no WebCodecs, or a non-WebM recording): a camera seek per frame is too slow
+          // for the screen to keep playing in realtime (it ran ahead and froze, QA #49 B1), so hold
+          // the screen and seek both to this frame exactly.
+          // Both seeks run together; a paused element may not fire a frame callback, so the wait for
+          // the presented frame is capped lower than the GIF path's.
+          const screen = exportPlaybackVideoRef.current;
+          await Promise.all([screen ? seekToPresentedFrame(screen, sourceTime, FALLBACK_SEEK_WAIT_MS) : null, syncCameraExact(time, FALLBACK_SEEK_WAIT_MS)]);
+          return;
+      }
+      await syncScreenExportPlayback(sourceTime);
   };
 
   const syncScreenExportPlayback = async (sourceTime: number): Promise<void> => {

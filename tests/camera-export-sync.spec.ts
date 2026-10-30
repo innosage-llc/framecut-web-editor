@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFileSync } from 'child_process';
-import { boot, loadWithCamera, applyLinkedEdits, noAacShim, exportGif, exportMp4, decodeGifFrames, SCREEN_FI, CAMERA_FI } from './helpers/cameraBubbleHelpers';
+import { boot, callApi, loadWithCamera, applyLinkedEdits, noAacShim, exportGif, exportMp4, decodeGifFrames, SCREEN_FI, CAMERA_FI } from './helpers/cameraBubbleHelpers';
 
 // #28 PR-C: the camera bubble stays within one frame of the screen across the whole MP4 export
 // (play-along camera), and the GIF (exact per-frame seeks) is pixel-identical to the 9e9f0b2 baseline.
@@ -32,11 +32,16 @@ const readBits = (frame: Buffer, pts: number[][]) => pts.reduce((acc, [x, y], b)
   return acc | (lum > 128 ? 1 << b : 0);
 }, 0);
 
-test('MP4: camera within one frame of the screen for every frame, after split, speed and trim', async ({ page }) => {
-  test.setTimeout(300_000);
+async function checkMp4(page: any, variant: { noWebCodecs?: boolean; noCamera?: boolean }) {
+  if (variant.noWebCodecs) await page.addInitScript(() => { delete (window as any).VideoDecoder; });
   const clips = await project(page);
+  if (variant.noCamera) {
+    for (const c of clips) await callApi(page, 'updateClip', c.id, { cameraBubble: { ...c.cameraBubble, visible: false } });
+    await page.waitForTimeout(300);
+  }
+  const tag = (variant.noWebCodecs ? 'noWC' : 'wc') + (variant.noCamera ? '-nocam' : '');
   const { path, seconds } = await exportMp4(page);
-  fs.copyFileSync(path, '/workspace/pr28-logs/prc-sync-export.mp4');
+  fs.copyFileSync(path, `/workspace/pr28-logs/prc-sync-export-${tag}.mp4`);
   const [w, h] = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', path]).toString().trim().split(',').map(Number);
   expect([w, h]).toEqual([W, H]);
   const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 30 });
@@ -52,16 +57,32 @@ test('MP4: camera within one frame of the screen for every frame, after split, s
     // Offset in output frames: one output frame spans `speed` source frames.
     rows.push({ i, screen, camera, offsetFrames: Math.abs(camera - screen) / speedAt(t) });
   }
+  // The screen frame is the one the edited timeline asks for (±1 frame), not wherever playback got to.
+  const expectedScreen = (t: number) => { const c = sorted.find((c: any) => t >= c.offset && t < c.offset + (c.sourceEnd - c.sourceStart) / c.speed); return c ? Math.round((c.sourceStart + (t - c.offset) * c.speed) * FPS) : null; };
   const max = Math.max(...rows.map(r => r.offsetFrames));
-  fs.writeFileSync('/workspace/pr28-logs/prc-sync-offsets.json', JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max, rows }, null, 1));
-  console.log('MP4_SYNC', JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max }));
+  fs.writeFileSync(`/workspace/pr28-logs/prc-sync-offsets-${tag}.json`, JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max, rows }, null, 1));
+  const maxScreenErr = Math.max(...rows.map(r => { const e = expectedScreen(r.i / FPS); return e === null ? 0 : Math.abs(r.screen - e); }));
+  console.log('MP4_SYNC', tag, JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max, maxScreenErrFrames: maxScreenErr }));
   expect(rows.length).toBeGreaterThan(200);
   // Screen index sanity: it follows the edited timeline (split + 2x + trim), so the decode is real.
   expect(new Set(rows.map(r => r.screen)).size).toBeGreaterThan(150);
-  // The screen frame is the one the edited timeline asks for (±1 frame), not wherever playback got to.
-  const expectedScreen = (t: number) => { const c = sorted.find((c: any) => t >= c.offset && t < c.offset + (c.sourceEnd - c.sourceStart) / c.speed); return c ? Math.round((c.sourceStart + (t - c.offset) * c.speed) * FPS) : null; };
   for (const r of rows) { const e = expectedScreen(r.i / FPS); if (e !== null) expect(Math.abs(r.screen - e), `frame ${r.i}: screen ${r.screen} expected ${e}`).toBeLessThanOrEqual(1); }
-  for (const r of rows) expect(r.offsetFrames, `frame ${r.i}: screen ${r.screen} camera ${r.camera}`).toBeLessThanOrEqual(1);
+  if (!variant.noCamera) for (const r of rows) expect(r.offsetFrames, `frame ${r.i}: screen ${r.screen} camera ${r.camera}`).toBeLessThanOrEqual(1);
+}
+
+test('MP4: camera within one frame of the screen for every frame, after split, speed and trim', async ({ page }) => {
+  test.setTimeout(300_000);
+  await checkMp4(page, {});
+});
+
+test('MP4 without WebCodecs (fallback): screen and camera both frame-exact (QA #49 B1)', async ({ page }) => {
+  test.setTimeout(300_000);
+  await checkMp4(page, { noWebCodecs: true });
+});
+
+test('MP4 without a camera bubble: screen frame-exact at split/speed/trim points (QA #49 W3)', async ({ page }) => {
+  test.setTimeout(300_000);
+  await checkMp4(page, { noCamera: true });
 });
 
 test('GIF is pixel-identical to the 9e9f0b2 baseline (same project)', async ({ page }) => {
