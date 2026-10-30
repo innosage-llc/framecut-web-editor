@@ -355,7 +355,7 @@ test.describe('setup without granted permission', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].audio.deviceId).toBeUndefined(); // default device, no stale exact id
     // Re-enumerated with real ids and labels; the opened device is the selection.
-    await expect.poll(async () => (await mic.locator('option').allTextContents()).length).toBeGreaterThan(1);
+    await expect.poll(async () => (await mic.locator('option').allTextContents()).includes('Microphone')).toBe(false);
     const labels = await mic.locator('option').allTextContents();
     expect(labels).not.toContain('Microphone');
     expect(labels.length).toBeGreaterThan(2); // the real devices are listed
