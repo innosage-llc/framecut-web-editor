@@ -10,14 +10,14 @@ test('capture a screen recording for 5 seconds', async ({ page }) => {
     await page.getByRole('button', { name: 'Start Recording' }).click();
 
     // 3. Wait for recording to start (look for Stop button or recording indicator)
-    await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
 
     // 4. Wait for 5 seconds
     console.log('Recording for 5 seconds...');
     await page.waitForTimeout(5000);
 
     // 5. Click Stop Recording
-    await page.getByRole('button', { name: 'Stop Recording' }).click();
+    await page.getByRole('button', { name: 'Stop Sharing' }).click();
 
     // 6. Verify transition to Editor
     // Give it a bit more time and look for the filename or the canvas
