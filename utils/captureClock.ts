@@ -34,6 +34,11 @@ export interface SourceTiming {
   requestedOffset: number;
   startOffset: number;
   stopOffset: number;
+  /**
+   * The source was verified to be delivering samples when its recorder was started (the mono mic
+   * path waits for that), so its media time 0 is the start() call whatever its `start` event says.
+   */
+  flowingAtStart?: boolean;
 }
 
 /**
@@ -54,11 +59,22 @@ export const LATE_START_S = 0.25;
  * that produced no data, see PR-A).
  */
 export const mediaStartOf = (t: SourceTiming): number =>
+  t.flowingAtStart ? t.requestedOffset :
   t.startOffset - t.requestedOffset > LATE_START_S && t.startOffset < t.stopOffset - 0.05 ? t.startOffset : t.requestedOffset;
 
 /**
  * #28: offset of a companion source (mic) relative to the screen, in seconds of screen-source time.
  * Positive = the companion started later than the screen.
  */
-export const companionTimeOffset = (screen: SourceTiming, companion: SourceTiming): number =>
-  mediaStartOf(companion) - mediaStartOf(screen);
+export const companionTimeOffset = (screen: SourceTiming, companion: SourceTiming, screenAudioLead = 0): number =>
+  mediaStartOf(companion) - screenMediaStart(screen) - screenAudioLead;
+
+/**
+ * The screen recording's media time 0: its start() call. The late-start rule above is for companion
+ * sources only; the screen recorder's `start` waits for a *video* chunk to be encoded, which under
+ * CPU load or in a cold renderer can take longer than LATE_START_S (seen: 267 ms) even though the
+ * recording began on time, and treating that as a late start moved narration ~180 ms early.
+ * `screenAudioLead` (see utils/webmAudioLead) is subtracted when the screen file's timeline was
+ * re-based to its first audio packet.
+ */
+export const screenMediaStart = (screen: SourceTiming): number => screen.requestedOffset;

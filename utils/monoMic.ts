@@ -7,14 +7,26 @@ export interface MonoMic {
   stream: MediaStream;
   /** Resolves once the graph is rendering (samples flow into `stream`). */
   ready: Promise<void>;
+  /** True once `ready` saw samples flowing out of the graph (so a recorder started now begins at start()). */
+  flowing: () => boolean;
   sampleRate: number;
   channelCount: number;
   close: () => void;
+  /**
+   * True when this graph was built in a cold renderer (the one-off encoder warm-up below took longer
+   * than COLD_WARMUP_MS). Such a graph was seen to carry 70–80 ms more input latency than normal for
+   * the rest of its life (narration landed that much late), so callers rebuild it once: see release().
+   */
+  coldStart: () => boolean;
+  /** Tear the graph down but leave the input tracks running (for a rebuild). */
+  release: () => void;
 }
 
+export const COLD_WARMUP_MS = 250;
+
 let warmed: Promise<void> | null = null;
-const warmUpAudioRecorder = (stream: MediaStream): Promise<void> => {
-  if (warmed) return warmed;
+const warmUpAudioRecorder = (stream: MediaStream, force = false): Promise<void> => {
+  if (warmed && !force) return warmed;
   warmed = new Promise<void>((resolve) => {
     let rec: MediaRecorder;
     try {
@@ -29,7 +41,7 @@ const warmUpAudioRecorder = (stream: MediaStream): Promise<void> => {
   return warmed;
 };
 
-export const createMonoMicStream = (input: MediaStream): MonoMic | null => {
+export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean } = {}): MonoMic | null => {
   const AC = window.AudioContext || (window as any).webkitAudioContext;
   if (!AC) return null;
   let ctx: AudioContext;
@@ -44,6 +56,8 @@ export const createMonoMicStream = (input: MediaStream): MonoMic | null => {
   dest.channelCountMode = 'explicit';
   dest.channelInterpretation = 'speakers';
   source.connect(dest);
+  let flowed = false;
+  let cold = false;
   const ready = (async () => {
     try { await ctx.resume?.(); } catch { /* ignore */ }
     // Wait until mono samples actually flow out of the graph, so the narration recorder's media
@@ -53,17 +67,29 @@ export const createMonoMicStream = (input: MediaStream): MonoMic | null => {
     const flowing = () => (out?.stats && typeof out.stats.deliveredFrames === 'number' ? out.stats.deliveredFrames > 0 : ctx.currentTime > 0);
     const t = performance.now();
     while (!flowing() && performance.now() - t < 3000) await new Promise(r => setTimeout(r, 5));
+    flowed = flowing();
     // The first audio MediaRecorder in a page can take over a second to initialise its encoder and
     // drops the samples captured meanwhile, so narration would start late. Warm it up once here.
-    await warmUpAudioRecorder(dest.stream);
+    const first = !warmed;
+    const w0 = performance.now();
+    await warmUpAudioRecorder(dest.stream, !!opts.rewarm);
+    cold = !opts.rewarm && first && performance.now() - w0 > COLD_WARMUP_MS;
   })();
   // Keep the graph referenced for the life of the recording (avoids GC of the source node).
   const keep = { source, dest };
   return {
     stream: dest.stream,
     ready,
+    flowing: () => flowed,
     sampleRate: ctx.sampleRate,
     channelCount: dest.channelCount,
+    coldStart: () => cold,
+    release: () => {
+      void keep;
+      try { source.disconnect(); } catch { /* ignore */ }
+      ctx.close().catch(() => {});
+      dest.stream.getTracks().forEach(t => t.stop());
+    },
     close: () => {
       void keep;
       try { source.disconnect(); } catch { /* ignore */ }
