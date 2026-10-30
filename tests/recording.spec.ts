@@ -4,10 +4,10 @@ test('capture a screen recording for 5 seconds', async ({ page }) => {
     await page.goto('/');
 
     // 1. Verify we are on the initial landing state
-    await expect(page.getByRole('button', { name: 'Start Screen Recording' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible();
 
     // 2. Click Start Recording
-    await page.getByRole('button', { name: 'Start Screen Recording' }).click();
+    await page.getByRole('button', { name: 'Start Recording' }).click();
 
     // 3. Wait for recording to start (look for Stop button or recording indicator)
     await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible({ timeout: 10000 });
