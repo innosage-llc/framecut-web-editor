@@ -9,6 +9,7 @@ import { MIC_CONSTRAINTS, CAMERA_CONSTRAINTS, describeMediaError } from './useRe
 import { createMonoMicStream, MonoMic } from '../utils/monoMic';
 import { rebaseWebmToAudioStart } from '../utils/webmAudioLead';
 import { cancelCapturePreflight } from '../utils/capturePreflight';
+import { createProbeSet, ProbeSet } from '../utils/firstSample';
 
 interface UseScreenRecorderProps {
   onRecordingComplete: (blob: Blob, name: string, events: RecordingEvent[], durationHint?: number, extras?: RecordingImportExtras) => void;
@@ -39,6 +40,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
   const captureSession = useCaptureSession();
   // #28: the mono mic path was delivering samples when the session started (see mediaStartOf).
   const micFlowingRef = useRef(false);
+  const probesRef = useRef<ProbeSet | null>(null);
   const finishingRef = useRef(false);
   const micSettingsRef = useRef<{ sampleRate: number; channelCount: number; deviceSampleRate?: number; deviceChannelCount?: number } | null>(null);
   const monoMicRef = useRef<MonoMic | null>(null);
@@ -144,9 +146,19 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       const durationHint = Math.max(0, screen.stopOffset - screen.requestedOffset - screenAudioLead);
       // #28: microphone narration, aligned to the screen on the common session clock.
       const mic = result.sources.find(src => src.id === 'mic');
+      // Anchor both files on their first audio sample (capture clock): the screen file starts at its
+      // first audio packet (re-based above), the narration at its first sample.
+      const probes = probesRef.current;
+      probesRef.current = null;
+      probes?.stop();
+      const perfOf = (o: number) => result.clock.t0 + o * 1000;
+      const scrA = probes?.probes[0].firstAfter(perfOf(screen.requestedOffset)) ?? null;
+      const micA = mic ? probes?.probes[1].firstAfter(perfOf(mic.requestedOffset)) ?? null : null;
+      const anchored = scrA !== null && micA !== null;
+      const narrationOffset = !mic ? 0 : anchored ? (micA! - scrA!) / 1000 : companionTimeOffset(screen, { ...mic, flowingAtStart: micFlowingRef.current }, screenAudioLead);
       const extrasAcc: RecordingImportExtras = {};
       if (mic && mic.blob.size > 0) {
-        extrasAcc.narration = { blob: mic.blob, timeOffset: companionTimeOffset(screen, { ...mic, flowingAtStart: micFlowingRef.current }, screenAudioLead), duration: Math.max(0, mic.stopOffset - mic.startOffset) };
+        extrasAcc.narration = { blob: mic.blob, timeOffset: narrationOffset, duration: Math.max(0, mic.stopOffset - mic.startOffset) };
       }
       // #28: camera, aligned the same way. After a disconnect its duration ends at the last frame.
       const cam = result.sources.find(src => src.id === 'camera');
@@ -167,6 +179,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           screenBlob: screen.blob,
           durationHint,
           screenAudioLead,
+          anchors: { anchored, scrMs: scrA === null ? null : scrA - perfOf(screen.requestedOffset), micMs: micA === null || !mic ? null : micA - perfOf(mic.requestedOffset) },
           eventCount: events.length,
           completedCount: ((window as any).__FRAMECUT_LAST_CAPTURE__?.completedCount ?? 0) + 1,
         };
@@ -269,8 +282,17 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
         };
         specs.push({ id: 'camera', kind: 'video', stream: cameraStream });
       }
+      probesRef.current?.stop();
+      probesRef.current = null;
+      const screenAudio = stream.getAudioTracks()[0];
+      const micSpec = specs.find(sp => sp.id === 'mic');
+      if (micSpec && screenAudio) {
+        const probes = createProbeSet([screenAudio, micSpec.stream.getAudioTracks()[0]]);
+        if (probes && await probes.ready) probesRef.current = probes; else probes?.stop();
+      }
       // start() tears everything down itself and throws if a recorder can't start.
       captureSession.start(specs);
+      { const p = probesRef.current; if (p) setTimeout(() => p.stop(), 3000); }
       const sessionStream = stream;
       sessionStreamRef.current = sessionStream;
       // Only the live session's stream may end it (a stale stream from a failed start must not).
