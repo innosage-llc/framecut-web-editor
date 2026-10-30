@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { CaptureClock, createCaptureClock } from '../utils/captureClock';
 import { RecorderKind, blobTypeFor, pickRecorderMimeType } from '../utils/recorderMime';
 
@@ -47,7 +47,7 @@ interface ActiveRecorder {
   /** recorder.start() returned without throwing. A recorder that never started never fires onstop. */
   started: boolean;
   done: Promise<CapturedSource>;
-  finish: () => void;
+  finish: (at?: number) => void;
 }
 
 const stopTracks = (specs: CaptureSourceSpec[]) => {
@@ -55,31 +55,54 @@ const stopTracks = (specs: CaptureSourceSpec[]) => {
 };
 
 /** Upper bound for a recorder's onstop after stop(); keeps Stop from hanging on an engine bug. */
-const STOP_TIMEOUT_MS = 4000;
+export const STOP_TIMEOUT_MS = 4000;
 
-export const useCaptureSession = () => {
-  const clockRef = useRef<CaptureClock | null>(null);
-  const activeRef = useRef<ActiveRecorder[]>([]);
+export interface CaptureSessionDeps {
+  /** MediaRecorder implementation (tests inject fakes). */
+  MediaRecorder?: typeof MediaRecorder;
+  /** Clock source in ms (performance.now by default). */
+  nowMs?: () => number;
+  stopTimeoutMs?: number;
+}
+
+export interface CaptureSessionController {
+  start: (specs: CaptureSourceSpec[]) => CaptureClock;
+  stop: () => Promise<CaptureSessionResult | null>;
+  now: () => number;
+  startOffsetOf: (id: string) => number | null;
+  isActive: () => boolean;
+}
+
+/**
+ * The capture session without React: one instance per recorder hook. Exported so its
+ * cleanup/error paths can be tested directly with fake recorders and streams.
+ */
+export const createCaptureSession = (deps: CaptureSessionDeps = {}): CaptureSessionController => {
+  const Recorder = () => deps.MediaRecorder ?? MediaRecorder;
+  const stopTimeoutMs = deps.stopTimeoutMs ?? STOP_TIMEOUT_MS;
+  let clockRef: CaptureClock | null = null;
+  let activeRef: ActiveRecorder[] = [];
 
   /**
    * Start all recorders in the same task, on a fresh clock. If any recorder fails to construct or
    * start, everything is torn down (started recorders stopped, every track of every source stopped,
    * session cleared) and the error is rethrown, so a failed start never leaves a live capture behind.
    */
-  const start = useCallback((specs: CaptureSourceSpec[]): CaptureClock => {
-    const clock = createCaptureClock();
+  const start = (specs: CaptureSourceSpec[]): CaptureClock => {
+    const clock = createCaptureClock(deps.nowMs);
     const active: ActiveRecorder[] = [];
+    const MR = Recorder();
     try {
       for (const spec of specs) {
-        const requestedMime = pickRecorderMimeType(spec.kind);
-        const recorder = requestedMime ? new MediaRecorder(spec.stream, { mimeType: requestedMime }) : new MediaRecorder(spec.stream);
+        const requestedMime = deps.MediaRecorder ? pickRecorderMimeType(spec.kind, (t) => (MR as any).isTypeSupported?.(t) ?? false) : pickRecorderMimeType(spec.kind);
+        const recorder = requestedMime ? new MR(spec.stream, { mimeType: requestedMime }) : new MR(spec.stream);
         const entry = { spec, recorder, chunks: [] as Blob[], requestedMime, requestedOffset: 0, startOffset: null as number | null, started: false } as ActiveRecorder;
         entry.done = new Promise<CapturedSource>((resolve) => {
           let settled = false;
-          entry.finish = () => {
+          entry.finish = (at?: number) => {
             if (settled) return;
             settled = true;
-            const stopOffset = clock.now();
+            const stopOffset = at ?? clock.now();
             const mimeType = blobTypeFor(spec.kind, recorder.mimeType, requestedMime);
             resolve({
               id: spec.id,
@@ -111,28 +134,31 @@ export const useCaptureSession = () => {
       stopTracks(specs);
       throw e;
     }
-    clockRef.current = clock;
-    activeRef.current = active;
+    clockRef = clock;
+    activeRef = active;
     return clock;
-  }, []);
+  };
 
   /** Stop every recorder that's still running and resolve once all have flushed. */
-  const stop = useCallback(async (): Promise<CaptureSessionResult | null> => {
-    const clock = clockRef.current;
-    const active = activeRef.current;
+  const stop = async (): Promise<CaptureSessionResult | null> => {
+    const clock = clockRef;
+    const active = activeRef;
     if (!clock || active.length === 0) return null;
     // Claim the session first so a concurrent stop() (Stop button + track `ended`) gets null.
-    activeRef.current = [];
-    clockRef.current = null;
+    activeRef = [];
+    clockRef = null;
+    // The session's stop time on its own clock: a recorder whose onstop never comes is closed at
+    // this time (not when the timeout fires), so its duration stays right.
+    const stopAt = clock.now();
     for (const a of active) {
       if (a.recorder.state !== 'inactive') {
-        try { a.recorder.stop(); } catch { a.finish(); }
+        try { a.recorder.stop(); } catch { a.finish(stopAt); }
       } else if (!a.started) {
-        a.finish(); // never started: no onstop will come
+        a.finish(stopAt); // never started: no onstop will come
       }
     }
     // A recorder whose onstop never arrives must not hang Stop forever.
-    const timer = setTimeout(() => active.forEach(a => a.finish()), STOP_TIMEOUT_MS);
+    const timer = setTimeout(() => active.forEach(a => a.finish(stopAt)), stopTimeoutMs);
     try {
       const sources = await Promise.all(active.map(a => a.done));
       return { clock, sources };
@@ -140,15 +166,17 @@ export const useCaptureSession = () => {
       clearTimeout(timer);
       stopTracks(active.map(a => a.spec));
     }
-  }, []);
+  };
 
-  /** Session seconds since start (0 when idle). */
-  const now = useCallback(() => clockRef.current?.now() ?? 0, []);
-
-  /** Start offset of a source once its recorder has fired `start` (null before that). */
-  const startOffsetOf = useCallback((id: string) => activeRef.current.find(a => a.spec.id === id)?.startOffset ?? null, []);
-
-  const isActive = useCallback(() => activeRef.current.some(a => a.recorder.state !== 'inactive'), []);
-
-  return useMemo(() => ({ start, stop, now, startOffsetOf, isActive }), [start, stop, now, startOffsetOf, isActive]);
+  return {
+    start,
+    stop,
+    /** Session seconds since start (0 when idle). */
+    now: () => clockRef?.now() ?? 0,
+    /** Start offset of a source once its recorder has fired `start` (null before that). */
+    startOffsetOf: (id: string) => activeRef.find(a => a.spec.id === id)?.startOffset ?? null,
+    isActive: () => activeRef.some(a => a.recorder.state !== 'inactive'),
+  };
 };
+
+export const useCaptureSession = (): CaptureSessionController => useMemo(() => createCaptureSession(), []);
