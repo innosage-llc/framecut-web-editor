@@ -28,3 +28,25 @@ export const createCaptureClock = (nowMs: () => number = () => performance.now()
  */
 export const sessionToMediaTime = (sessionSeconds: number, startOffset: number): number =>
   Math.max(0, sessionSeconds - Math.max(0, startOffset));
+
+/** Minimal timing of one recorded source (see CapturedSource in hooks/useCaptureSession). */
+export interface SourceTiming {
+  requestedOffset: number;
+  startOffset: number;
+  stopOffset: number;
+}
+
+/**
+ * Best estimate of when a source's media time 0 happened on the session clock: the recorder's
+ * `start` event when it is plausible (fired before the source stopped), else the start() call.
+ * Chromium can delay `start` until stop for a source that produced no data (see PR-A).
+ */
+export const mediaStartOf = (t: SourceTiming): number =>
+  t.startOffset >= t.requestedOffset && t.startOffset < t.stopOffset - 0.05 ? t.startOffset : t.requestedOffset;
+
+/**
+ * #28: offset of a companion source (mic) relative to the screen, in seconds of screen-source time.
+ * Positive = the companion started later than the screen.
+ */
+export const companionTimeOffset = (screen: SourceTiming, companion: SourceTiming): number =>
+  mediaStartOf(companion) - mediaStartOf(screen);

@@ -1,12 +1,15 @@
+import type React from 'react';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { DEFAULT_BACKGROUND_FRAME, normalizeBackgroundFrame } from '../utils/backgroundFrame';
 import { ExtendedEditorState, Clip, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect } from '../types';
 import { generateId } from '../utils';
 import { useHistory } from './useHistory';
+import { linkedCompanions } from '../utils/linkedRecordingClips';
+import type { AudioRole } from '../types';
 import { useClipOperations } from './useClipOperations';
 
-type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'duration' | 'clips' | 'audioClips' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
+type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'narration' | 'duration' | 'clips' | 'audioClips' | 'narrationClips' | 'mutedAudioRoles' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
 
 // 定义存储键名 (必须与 useProjectPersistence 保持一致)
 const STORAGE_KEY = 'framecut-project-v1';
@@ -18,6 +21,7 @@ const defaultState: ExtendedEditorState = {
     mainVideo: null,
     outro: null,
     audio: null,
+    narration: null,
     duration: 0,
     currentTime: 0,
     isPlaying: false,
@@ -30,6 +34,8 @@ const defaultState: ExtendedEditorState = {
     backgroundFrame: DEFAULT_BACKGROUND_FRAME,
     clips: [],
     audioClips: [],
+    narrationClips: [],
+    mutedAudioRoles: [],
     subtitles: [],
     zoomEffects: [],
     spotlightEffects: [],
@@ -52,7 +58,7 @@ const defaultState: ExtendedEditorState = {
 
 export const useEditor = () => {
     // 【核心修复】使用初始化函数来加载状态
-    const [state, setState] = useState<ExtendedEditorState>(() => {
+    const [state, setRawState] = useState<ExtendedEditorState>(() => {
         // 1. 安全检查：如果正在等待重置，强制返回空状态
         if (localStorage.getItem(PENDING_RESET_KEY) === 'true') {
             console.log("useEditor: 检测到重置标记，跳过本地缓存加载");
@@ -79,6 +85,20 @@ export const useEditor = () => {
         // 3. 如果没有缓存，返回默认状态
         return defaultState;
     });
+
+    // #28: every edit that changes the screen clips (trim, split, move, delete, speed, ripple,
+    // Magic Edit…) also re-times linked narration clips. Updates that replace narrationClips
+    // themselves (undo/redo, project load, import) are left as they are.
+    const setState = useCallback<React.Dispatch<React.SetStateAction<ExtendedEditorState>>>((action) => {
+        setRawState(prev => {
+            const next = typeof action === 'function' ? (action as (p: ExtendedEditorState) => ExtendedEditorState)(prev) : action;
+            if (next === prev || next.clips === prev.clips) return next;
+            const narration = prev.narrationClips ?? [];
+            if (narration.length === 0 || next.narrationClips !== prev.narrationClips) return next;
+            const updated = linkedCompanions(prev.clips, next.clips, narration);
+            return updated === narration ? next : { ...next, narrationClips: updated };
+        });
+    }, []);
 
     const stateRef = useRef(state);
     useEffect(() => { stateRef.current = state; }, [state]);
@@ -127,9 +147,12 @@ export const useEditor = () => {
         mainVideo: fullState.mainVideo,
         outro: fullState.outro,
         audio: fullState.audio,
+        narration: fullState.narration ?? null,
         duration: fullState.duration,
         clips: fullState.clips,
         audioClips: fullState.audioClips,
+        narrationClips: fullState.narrationClips ?? [],
+        mutedAudioRoles: fullState.mutedAudioRoles ?? [],
         subtitles: fullState.subtitles,
         zoomEffects: fullState.zoomEffects,
         spotlightEffects: fullState.spotlightEffects,
@@ -174,6 +197,7 @@ export const useEditor = () => {
         handleDelete,
         handleSplit,
         handleCrop,
+        handleToggleNarrationClipMute,
         handleUpdateClip,
         handleUpdateSubtitle,
         handleUpdateZoomEffect,
@@ -274,7 +298,7 @@ export const useEditor = () => {
             const clipId = prev.selection.id;
             const videoClip = prev.clips.find(c => c.id === clipId);
             if (!videoClip) return prev;
-            const newAudioClip: Clip = { ...videoClip, id: generateId(), muted: false };
+            const newAudioClip: Clip = { ...videoClip, id: generateId(), muted: false, recordingLinkID: undefined }; // #28: detached system audio is independent of the recording link
             const updatedVideoClips = prev.clips.map(c => c.id === clipId ? { ...c, muted: true } : c);
             const updatedAudioClips = [...prev.audioClips, newAudioClip];
             return { ...prev, clips: updatedVideoClips, audioClips: updatedAudioClips, selection: { type: 'audio', id: newAudioClip.id }, duration: recalculateDuration(updatedVideoClips, updatedAudioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects) };
@@ -354,9 +378,21 @@ export const useEditor = () => {
         setState(prev => ({ ...prev, ...updates }));
     }, []);
 
+    /** #28: A1/A2/A3 lane mute; persisted and one undo step. Music mirrors the legacy audio-track mute. */
+    const handleSetAudioRoleMuted = useCallback((role: AudioRole, muted: boolean) => {
+        pushHistory();
+        setState(prev => {
+            const roles = new Set<AudioRole>(prev.mutedAudioRoles ?? []);
+            if (role === 'music' && prev.isAudioTrackMuted) roles.add('music');
+            if (muted) roles.add(role); else roles.delete(role);
+            return { ...prev, mutedAudioRoles: (['system', 'narration', 'music'] as AudioRole[]).filter(r => roles.has(r)), isAudioTrackMuted: roles.has('music') };
+        });
+    }, [pushHistory, setState]);
+
     return {
         state,
         setState,
+        handleSetAudioRoleMuted,
         stateRef,
         pushHistory,
         handleUndo,
@@ -365,6 +401,7 @@ export const useEditor = () => {
         handleDelete,
         handleSplit,
         handleCrop,
+        handleToggleNarrationClipMute,
         handleUpdateClip,
         handleUpdateSubtitle,
         handleUpdateZoomEffect,

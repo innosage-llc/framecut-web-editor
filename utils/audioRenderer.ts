@@ -1,6 +1,7 @@
 
 import { Clip, MediaAsset, EditorState } from '../types';
 import { getAssetFromDB } from './db';
+import { effectiveMutedRoles, isClipAudible, narrationWindow } from './audioLanes';
 
 // Helper to get raw AudioBuffer from an asset
 const decodeAsset = async (asset: MediaAsset, ctx: BaseAudioContext): Promise<AudioBuffer | null> => {
@@ -42,7 +43,8 @@ export const renderProjectAudio = async (state: EditorState, sampleRate = 44100)
     const ctx = new OfflineAudioContext(2, length, sampleRate);
 
     // 3. Gather all clips (Audio and Video tracks)
-    const allClips = [...state.clips, ...state.audioClips];
+    const allClips = [...state.clips, ...state.audioClips, ...(state.narrationClips ?? [])];
+    const mutedRoles = effectiveMutedRoles(state);
     const assetCache = new Map<string, AudioBuffer>();
 
     // 4. Decode all unique assets used
@@ -54,6 +56,7 @@ export const renderProjectAudio = async (state: EditorState, sampleRate = 44100)
         else if (type === 'main') asset = state.mainVideo;
         else if (type === 'outro') asset = state.outro;
         else if (type === 'audio') asset = state.audio;
+        else if (type === 'narration') asset = state.narration ?? null;
 
         if (asset && !assetCache.has(asset.id)) {
             const decoded = await decodeAsset(asset, ctx);
@@ -63,16 +66,32 @@ export const renderProjectAudio = async (state: EditorState, sampleRate = 44100)
 
     // 5. Schedule Sources
     for (const clip of allClips) {
-        if (clip.muted && clip.mediaType !== 'audio') continue; // Skip muted video clips. Background audio clips don't have 'muted' prop usually, or if they do we respect it.
-        
-        // Handle explicit track mute for background audio
-        if (clip.mediaType === 'audio' && (state as any).isAudioTrackMuted) continue; 
+        // #28: one audibility rule for clip mutes and A1/A2/A3 lane mutes (music ignores clip.muted, as before).
+        if (!isClipAudible(clip, mutedRoles)) continue;
 
         let asset: MediaAsset | null = null;
         if (clip.mediaType === 'intro') asset = state.intro;
         else if (clip.mediaType === 'main') asset = state.mainVideo;
         else if (clip.mediaType === 'outro') asset = state.outro;
         else if (clip.mediaType === 'audio') asset = state.audio;
+        else if (clip.mediaType === 'narration') asset = state.narration ?? null;
+
+        if (asset && assetCache.has(asset.id) && clip.mediaType === 'narration') {
+            const buffer = assetCache.get(asset.id)!;
+            const win = narrationWindow(clip, asset.timeOffset ?? 0, buffer.duration);
+            if (win && win.when < duration) {
+                const source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.playbackRate.value = clip.speed;
+                source.connect(ctx.destination);
+                try {
+                    source.start(win.when, win.bufferOffset, win.playDuration);
+                } catch (e) {
+                    console.warn("Failed to schedule narration clip", clip, e);
+                }
+            }
+            continue;
+        }
 
         if (asset && assetCache.has(asset.id)) {
             const buffer = assetCache.get(asset.id)!;

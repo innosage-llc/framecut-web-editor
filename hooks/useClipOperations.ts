@@ -3,6 +3,15 @@ import { Dispatch, SetStateAction, useCallback } from 'react';
 import { ExtendedEditorState, Clip, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect } from '../types';
 import { generateId } from '../utils';
 import { calculateZoomRect } from '../utils/canvasRenderer';
+import { linkedScreenClip } from '../utils/linkedRecordingClips';
+
+/** #28: a selected narration clip edits the whole recording through its linked screen clip. */
+const resolveLinkedSelection = (prev: ExtendedEditorState): ExtendedEditorState => {
+    if (prev.selection?.type !== 'narration') return prev;
+    const narration = (prev.narrationClips ?? []).find(c => c.id === prev.selection!.id);
+    const screen = narration ? linkedScreenClip(narration, prev.clips) : undefined;
+    return screen ? { ...prev, selection: { type: 'clip', id: screen.id } } : prev;
+};
 
 interface UseClipOperationsProps {
     setState: Dispatch<SetStateAction<ExtendedEditorState>>;
@@ -21,7 +30,8 @@ export const useClipOperations = ({ setState, pushHistory, recalculateDuration }
 
     const handleDelete = useCallback(() => {
         pushHistory();
-        setState(prev => {
+        setState(current => {
+            const prev = resolveLinkedSelection(current);
             if (!prev.selection) return prev;
             let newClips = prev.clips;
             let newAudioClips = prev.audioClips;
@@ -58,7 +68,8 @@ export const useClipOperations = ({ setState, pushHistory, recalculateDuration }
 
     const handleSplit = useCallback(() => {
         pushHistory();
-        setState(prev => {
+        setState(current => {
+            const prev = resolveLinkedSelection(current);
             const cursor = prev.currentTime;
             let newClips = [...prev.clips];
             let newAudioClips = [...prev.audioClips];
@@ -93,6 +104,15 @@ export const useClipOperations = ({ setState, pushHistory, recalculateDuration }
 
             return { ...prev, clips: newClips, audioClips: newAudioClips, selection: newSelection };
         });
+    }, [pushHistory, setState]);
+
+    /** #28: per-clip narration mute, independent of the A2 lane mute and of linked timing. */
+    const handleToggleNarrationClipMute = useCallback((id: string) => {
+        pushHistory();
+        setState(prev => ({
+            ...prev,
+            narrationClips: (prev.narrationClips ?? []).map(c => c.id === id ? { ...c, muted: !c.muted } : c),
+        }));
     }, [pushHistory, setState]);
 
     const handleCrop = useCallback(() => {
@@ -335,6 +355,7 @@ export const useClipOperations = ({ setState, pushHistory, recalculateDuration }
         handleDelete,
         handleSplit,
         handleCrop,
+        handleToggleNarrationClipMute,
         handleUpdateClip,
         handleUpdateSubtitle,
         handleUpdateZoomEffect,

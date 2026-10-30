@@ -100,6 +100,15 @@ export const useCaptureSession = () => {
     return { clock, sources };
   }, []);
 
+  /**
+   * Stop one source (e.g. a disconnected microphone) while the others keep recording.
+   * Its data so far is kept and returned with the rest by stop().
+   */
+  const stopSource = useCallback((id: string) => {
+    const entry = activeRef.current.find(a => a.spec.id === id);
+    if (entry && entry.recorder.state !== 'inactive') entry.recorder.stop();
+  }, []);
+
   /** Session seconds since start (0 when idle). */
   const now = useCallback(() => clockRef.current?.now() ?? 0, []);
 
@@ -108,5 +117,5 @@ export const useCaptureSession = () => {
 
   const isActive = useCallback(() => activeRef.current.some(a => a.recorder.state !== 'inactive'), []);
 
-  return useMemo(() => ({ start, stop, now, startOffsetOf, isActive }), [start, stop, now, startOffsetOf, isActive]);
+  return useMemo(() => ({ start, stop, stopSource, now, startOffsetOf, isActive }), [start, stop, stopSource, now, startOffsetOf, isActive]);
 };

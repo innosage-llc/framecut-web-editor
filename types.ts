@@ -8,8 +8,10 @@ export interface Clip {
   sourceEnd: number;   // End time in the source video file
   offset: number;      // Start time on the timeline
   speed: number;       // Playback speed multiplier (default 1)
-  mediaType: 'intro' | 'main' | 'outro' | 'audio'; // Identifies which source asset to use
+  mediaType: 'intro' | 'main' | 'outro' | 'audio' | 'narration'; // Identifies which source asset to use
   muted?: boolean;     // If true, audio is suppressed (used when audio is detached)
+  /** #28: clips captured in one recording share this id; timing edits propagate across them. */
+  recordingLinkID?: string;
   crop?: {             // Global crop for this clip (0-100 percentages)
       x: number;
       y: number;
@@ -26,7 +28,16 @@ export interface MediaAsset {
   waveformData?: number[]; // Normalized peaks (0-1) for visualization. ~100 samples per second.
   corsCompatible?: boolean; // Whether the asset supports CORS (required for export/canvas operations)
   storageId?: string; // ID used to retrieve the raw Blob from IndexedDB (persistence key)
+  /**
+   * #28 narration: screen-source time at which this asset's media time 0 starts
+   * (mic recorder start minus screen recorder start, on the capture clock).
+   * Narration clips use screen-source times; media time = source time - timeOffset.
+   */
+  timeOffset?: number;
 }
+
+/** #28: audio lanes, matching the macOS app (A1 System Audio, A2 Narration, A3 Music). */
+export type AudioRole = 'system' | 'narration' | 'music';
 
 export interface Subtitle {
   id: string;
@@ -124,6 +135,7 @@ export interface RecordingEvent {
 export type Selection = 
   | { type: 'clip', id: string } 
   | { type: 'audio', id: string }
+  | { type: 'narration', id: string }
   | { type: 'subtitle', id: string } 
   | { type: 'zoom', id: string }
   | { type: 'spotlight', id: string }
@@ -137,6 +149,8 @@ export interface EditorState {
   mainVideo: MediaAsset | null;
   outro: MediaAsset | null;
   audio: MediaAsset | null; // Background Audio Asset
+  /** #28: microphone narration recorded with the screen (A2). */
+  narration?: MediaAsset | null;
 
   // Timeline State
   duration: number; // Total timeline duration
@@ -156,6 +170,10 @@ export interface EditorState {
   // Track Data (Absolute Global Time)
   clips: Clip[];        // Video Clips
   audioClips: Clip[];   // Audio Clips (Structurally same as Clip but rendered in Audio Track)
+  /** #28: narration clips (A2), linked to the screen clips by recordingLinkID. */
+  narrationClips?: Clip[];
+  /** #28: persisted, undoable lane mutes. 'music' mirrors the legacy isAudioTrackMuted. */
+  mutedAudioRoles?: AudioRole[];
   subtitles: Subtitle[];
   zoomEffects: ZoomEffect[];
   spotlightEffects: SpotlightEffect[];

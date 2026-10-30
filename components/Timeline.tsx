@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect, useMemo, useLayoutEffect, useCallback } from 'react';
-import { Clip, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Selection, MediaAsset } from '../types';
+import { Clip, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Selection, MediaAsset, AudioRole } from '../types';
 import { Play, Pause } from 'lucide-react';
 import { useTimelineDrag } from '../hooks/useTimelineDrag';
 import TracksLayer from './TracksLayer';
@@ -37,6 +37,11 @@ interface TimelineProps {
   onInteractionStart?: () => void;
   isAudioTrackMuted?: boolean;
   onToggleAudioTrackMute?: () => void;
+  narration?: MediaAsset | null;
+  narrationClips?: Clip[];
+  mutedAudioRoles?: AudioRole[];
+  onSetAudioRoleMuted?: (role: AudioRole, muted: boolean) => void;
+  onToggleNarrationClipMute?: (id: string) => void;
   onPreviewTime?: (time: number | null) => void;
 }
 
@@ -98,6 +103,11 @@ const Timeline: React.FC<TimelineProps> = React.memo(({
   onInteractionStart,
   isAudioTrackMuted,
   onToggleAudioTrackMute,
+  narration = null,
+  narrationClips = [],
+  mutedAudioRoles = [],
+  onSetAudioRoleMuted,
+  onToggleNarrationClipMute,
   onPreviewTime
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -362,6 +372,9 @@ const Timeline: React.FC<TimelineProps> = React.memo(({
             isEmpty={isEmpty}
             isAudioTrackMuted={isAudioTrackMuted}
             onToggleAudioTrackMute={onToggleAudioTrackMute}
+            mutedAudioRoles={mutedAudioRoles}
+            hasNarration={narrationClips.length > 0}
+            onSetAudioRoleMuted={onSetAudioRoleMuted}
             subtitleTracks={subtitleTracks}
             spotlightTracks={spotlightTracks}
             mosaicTracks={mosaicTracks}
@@ -395,6 +408,9 @@ const Timeline: React.FC<TimelineProps> = React.memo(({
              outro={outro}
              mainVideo={mainVideo}
              audio={audio}
+             narration={narration}
+             narrationClips={narrationClips}
+             onToggleNarrationClipMute={onToggleNarrationClipMute}
              onSelect={onSelect}
              onSeek={onSeek}
              onInteractionStart={onInteractionStart}

@@ -24,6 +24,11 @@ interface UseAssetOperationsProps {
     stateRef?: React.MutableRefObject<ExtendedEditorState>;
 }
 
+/** #28: extra sources recorded with the screen. */
+export interface RecordingImportExtras {
+    narration?: { blob: Blob; timeOffset: number; duration: number };
+}
+
 export const useAssetOperations = ({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef }: UseAssetOperationsProps) => {
 
     /** Ask before a new (non-relink) main video wipes effects tied to the old media. Returns false if cancelled. */
@@ -269,15 +274,20 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
     }, [pushHistory, recalculateDuration, setState]);
 
     // Enhanced with durationHint and Error Handling
-    const handleLoadProject = useCallback(async (blobOrUrl: Blob | string, name: string, recordingEvents: RecordingEvent[] = [], durationHint?: number) => {
+    const handleLoadProject = useCallback(async (blobOrUrl: Blob | string, name: string, recordingEvents: RecordingEvent[] = [], durationHint?: number, extras?: RecordingImportExtras) => {
         let url: string;
         let storageId: string | undefined;
+        // #28: everything this import wrote, removed again if the import fails before commit.
+        const stagedStorageIds: string[] = [];
+        const stagedUrls: string[] = [];
+        let committed = false;
 
         try {
             if (blobOrUrl instanceof Blob) {
                 storageId = generateId(); 
                 try {
                     await storeAssetInDB(storageId, blobOrUrl);
+                    stagedStorageIds.push(storageId);
                     url = URL.createObjectURL(blobOrUrl);
                 } catch (e) {
                     console.error("Failed to store recording in DB", e);
@@ -313,6 +323,39 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
             }
 
             const initialClip: Clip = { id: generateId(), sourceStart: 0, sourceEnd: duration, offset: 0, speed: 1.0, mediaType: 'main' };
+
+            // #28: microphone narration recorded with the screen. Its clip mirrors the screen clip's
+            // timing (screen-source time) and is linked to it; the asset carries the measured offset.
+            let narrationAsset: MediaAsset | null = null;
+            let narrationClips: Clip[] = [];
+            if (extras?.narration && extras.narration.blob.size > 0) {
+                const n = extras.narration;
+                let narrationStorageId: string | undefined = generateId();
+                try {
+                    await storeAssetInDB(narrationStorageId, n.blob);
+                    stagedStorageIds.push(narrationStorageId);
+                } catch (e) {
+                    console.error("Failed to store narration in DB", e);
+                    narrationStorageId = undefined;
+                }
+                const narrationUrl = URL.createObjectURL(n.blob);
+                stagedUrls.push(narrationUrl);
+                narrationAsset = {
+                    id: generateId(),
+                    src: narrationUrl,
+                    name: `${name} (Narration)`,
+                    duration: Math.max(0, n.duration),
+                    corsCompatible: true,
+                    storageId: narrationStorageId,
+                    timeOffset: n.timeOffset,
+                };
+                const linkId = generateId();
+                initialClip.recordingLinkID = linkId;
+                narrationClips = [{ ...initialClip, id: generateId(), mediaType: 'narration', recordingLinkID: linkId, muted: false }];
+            }
+            if ((window as any).__FRAMECUT_E2E_ENABLED__ && (window as any).__FRAMECUT_E2E_FAIL_IMPORT__) {
+                throw new Error('E2E: simulated import failure');
+            }
             
             const asset: MediaAsset = {
                 id: generateId(),
@@ -325,6 +368,9 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
 
             currentTimeRef.current = 0;
             const canAutoZoom = hasClickMetadata(recordingEvents);
+            // One undo step per import, taken only once every async step has succeeded.
+            pushHistory();
+            committed = true;
             setState(prev => {
                 const enabled = prev.autoZoomEnabled !== false;
                 let zoomEffects: typeof prev.zoomEffects = [];
@@ -348,6 +394,8 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
                     intro: null,
                     outro: null,
                     audio: null,
+                    narration: narrationAsset,
+                    narrationClips,
                     fileName: name,
                     currentTime: 0,
                     isPlaying: false,
@@ -385,11 +433,24 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
                     });
                 }).catch(e => console.warn("Waveform extract failed", e));
             }
+            if (narrationAsset) {
+                const narrationId = narrationAsset.id;
+                extractWaveform(narrationAsset.src).then(waveformData => {
+                    setState(prev => prev.narration && prev.narration.id === narrationId
+                        ? { ...prev, narration: { ...prev.narration, waveformData } }
+                        : prev);
+                }).catch(e => console.warn("Narration waveform extract failed", e));
+            }
         } catch (e: any) {
+            if (!committed) {
+                // Roll back partial installs so a failed import leaves no stored media behind.
+                for (const id of stagedStorageIds) deleteAssetFromDB(id).catch(() => {});
+                for (const u of stagedUrls) URL.revokeObjectURL(u);
+            }
             console.error("Critical Error Loading Project/Recording", e);
             alert("Failed to load recording: " + (e.message || "Unknown error"));
         }
-    }, [currentTimeRef, setState]);
+    }, [currentTimeRef, setState, pushHistory]);
 
     // ... (handleUrlImport kept as is) ...
     const handleUrlImport = async (type: 'intro' | 'main' | 'outro' | 'audio', url: string) => {

@@ -26,7 +26,11 @@ import { chooseWhisperThreads, currentThreadEnv } from './utils/whisperThreads';
 // #27: on-device Whisper is the default engine (opt-in download on first use).
 installDefaultTranscriber(createWhisperTranscriber());
 import { VideoExportFormat, VideoExportSettings } from './utils/exportPresets';
-import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip, RecordingEvent } from './types';
+import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip, RecordingEvent, AudioRole } from './types';
+import { useRecordingDevices } from './hooks/useRecordingDevices';
+import RecordingSetup from './components/RecordingSetup';
+import { effectiveMutedRoles } from './utils/audioLanes';
+import { renderProjectAudio } from './utils/audioRenderer';
 
 const App: React.FC = () => {
   const {
@@ -36,7 +40,8 @@ const App: React.FC = () => {
     handleUpdateMosaicEffect, handleDetachAudio, handleAddSubtitle,
     handleAddZoom, handleAddSpotlight, handleAddMosaic, handleZoomScaleChange,
     handleMosaicBrushSizeChange, handleClipSpeedChange, handleToggleDebug,
-    handleSeek, handleSetCoverImage, handleUpdateProjectSettings, currentTimeRef
+    handleSeek, handleSetCoverImage, handleUpdateProjectSettings, currentTimeRef,
+    handleSetAudioRoleMuted, handleToggleNarrationClipMute
   } = useEditor();
 
   const playerRef = useRef<PlayerRef>(null);
@@ -46,6 +51,14 @@ const App: React.FC = () => {
 
   const { handleLoadProject, handleMagicPolish, handleAutoZoom, handleRemoveAutoZooms, handleAutoSpotlight, handleSetClickRipplesEnabled, handleSetAutoZoomEnabled, handleSetAutoZoomSensitivity, handleUrlImport, handleUploadAsset, handleSetColorAsset, handleRemoveAsset } = useAssetOperations({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef });
   const { videoCtx, audioCtx } = usePlaybackContext({ state });
+  // #28: non-blocking notices (microphone denied / disconnected).
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<any>(null);
+  const showNotice = useCallback((message: string) => {
+    setNotice(message);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 8000);
+  }, []);
   const { 
       isScreenRecording, 
       recordingMarkersCount, 
@@ -60,7 +73,16 @@ const App: React.FC = () => {
       handleStopScreenRecording, 
       handleMarker, 
       handleTogglePiP 
-  } = useScreenRecorder({ onRecordingComplete: handleLoadProject });
+  } = useScreenRecorder({ onRecordingComplete: handleLoadProject, onNotice: (m: string) => showNotice(m) });
+  // #28: recording setup devices (mic/camera Off by default, locked while recording).
+  const recordingDevices = useRecordingDevices({ locked: isScreenRecording });
+  const startRecordingWithSetup = useCallback(() => {
+    const micDeviceId = recordingDevices.micId;
+    recordingDevices.releasePreviews();
+    handleStartScreenRecording({ micDeviceId });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingDevices.micId, recordingDevices.releasePreviews, handleStartScreenRecording]);
+  const mutedRoles = effectiveMutedRoles(state);
   
   const { handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
 
@@ -157,7 +179,41 @@ const App: React.FC = () => {
         duration: state.duration,
         currentTime: state.currentTime,
         hasMainVideo: !!state.mainVideo,
+        // #28
+        narration: state.narration ? { timeOffset: state.narration.timeOffset ?? 0, duration: state.narration.duration, stored: !!state.narration.storageId, hasWaveform: !!state.narration.waveformData?.length } : null,
+        narrationClips: (state.narrationClips ?? []).map(c => ({ id: c.id, offset: c.offset, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd, speed: c.speed, muted: !!c.muted, recordingLinkID: c.recordingLinkID ?? null })),
+        linkedClips: state.clips.map(c => ({ id: c.id, recordingLinkID: c.recordingLinkID ?? null, muted: !!c.muted })),
+        mutedAudioRoles: state.mutedAudioRoles ?? [],
+        isAudioTrackMuted: !!state.isAudioTrackMuted,
       }),
+      /** #28: import a recording with microphone narration (same path as a real recording). */
+      loadWithNarration: async (blob: Blob, events: RecordingEvent[], durationHint: number, narrationBlob: Blob, timeOffset: number, narrationDuration: number) => {
+        await handleLoadProject(blob, 'E2E Narrated Recording', events, durationHint, { narration: { blob: narrationBlob, timeOffset, duration: narrationDuration } });
+      },
+      select: (sel: any) => setState(prev => ({ ...prev, selection: sel })),
+      split: () => handleSplit(),
+      deleteSelected: () => handleDelete(),
+      setSelectedSpeed: (speed: number) => handleClipSpeedChange(speed),
+      updateClip: (id: string, patch: Partial<Clip>) => {
+        const clip = stateRef.current.clips.find(c => c.id === id);
+        if (clip) { pushHistory(); handleUpdateClip({ ...clip, ...patch }); }
+      },
+      setLaneMuted: (role: AudioRole, muted: boolean) => handleSetAudioRoleMuted(role, muted),
+      toggleNarrationClipMute: (id: string) => handleToggleNarrationClipMute(id),
+      /** Render the project mix (same as MP4/WAV/M4A export) and return a 10 ms RMS envelope of channel 0. */
+      renderAudioEnvelope: async () => {
+        const buf = await renderProjectAudio(stateRef.current);
+        if (!buf) return null;
+        const ch = buf.getChannelData(0);
+        const win = Math.round(buf.sampleRate / 100);
+        const env: number[] = [];
+        for (let i = 0; i < ch.length; i += win) {
+          let sum = 0; const end = Math.min(ch.length, i + win);
+          for (let j = i; j < end; j++) sum += ch[j] * ch[j];
+          env.push(Math.sqrt(sum / Math.max(1, end - i)));
+        }
+        return { sampleRate: buf.sampleRate, duration: buf.duration, env };
+      },
       loadWithEvents: async (blob: Blob, events: RecordingEvent[], durationHint?: number) => {
         await handleLoadProject(blob, 'E2E In-tab Recording', events, durationHint);
       },
@@ -202,13 +258,13 @@ const App: React.FC = () => {
       redo: () => handleRedo(),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef, subtitleTools.setTimeoutMs, handleUndo, handleRedo, handleUpdateSubtitle, pushHistory]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef, subtitleTools.setTimeoutMs, handleUndo, handleRedo, handleUpdateSubtitle, pushHistory, state.narration, state.narrationClips, state.mutedAudioRoles, state.isAudioTrackMuted, handleSplit, handleDelete, handleClipSpeedChange, handleUpdateClip, handleSetAudioRoleMuted, handleToggleNarrationClipMute]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
   const handleStepFrame = useCallback((dir: -1 | 1) => handleSeek(Math.max(0, Math.min(stateRef.current.duration, stateRef.current.currentTime + (dir * (1/30))))), [handleSeek, stateRef]);
   const handleZoom = useCallback((dir: -1 | 1) => setState(prev => ({ ...prev, zoomLevel: Math.max(10, prev.zoomLevel + (dir * 10)) })), [setState]);
-  const handleToggleAudioTrackMute = useCallback(() => { pushHistory(); setState(prev => ({ ...prev, isAudioTrackMuted: !prev.isAudioTrackMuted })); }, [pushHistory, setState]);
+  const handleToggleAudioTrackMute = useCallback(() => handleSetAudioRoleMuted('music', !effectiveMutedRoles(stateRef.current).has('music')), [handleSetAudioRoleMuted, stateRef]);
 
   const handleScreenshot = useCallback(() => {
     if (playerRef.current) {
@@ -319,9 +375,13 @@ const App: React.FC = () => {
                 outroSrc={state.outro?.src}
                 currentTimeRef={currentTimeRef} 
                 currentTime={state.currentTime}
-                isMuted={videoCtx.muted}
+                isMuted={videoCtx.muted || mutedRoles.has('system')}
                 corsCompatible={videoCtx.corsCompatible}
                 audioSrc={audioCtx.src}
+                narrationSrc={state.narration?.src ?? null}
+                narrationClips={state.narrationClips ?? []}
+                narrationTimeOffset={state.narration?.timeOffset ?? 0}
+                isNarrationMuted={mutedRoles.has('narration')}
                 audioPlaybackRate={audioCtx.playbackRate}
                 allSubtitles={state.subtitles} 
                 selectedSubtitleId={state.selection?.type === 'subtitle' ? state.selection.id : null}
@@ -382,7 +442,20 @@ const App: React.FC = () => {
                     <h1 className="text-4xl font-bold mb-8 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 tracking-tight">FrameCut</h1>
                     
                     <div className="flex flex-col gap-4 w-full max-w-xs">
-                        <button onClick={handleStartScreenRecording} className="group relative flex items-center justify-center gap-3 px-6 py-4 bg-white text-black rounded-xl hover:bg-zinc-200 transition-all font-bold shadow-[0_0_20px_rgba(255,255,255,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)] hover:scale-[1.02]">
+                        <RecordingSetup
+                            mics={recordingDevices.mics}
+                            cameras={recordingDevices.cameras}
+                            micId={recordingDevices.micId}
+                            cameraId={recordingDevices.cameraId}
+                            micError={recordingDevices.micError}
+                            cameraError={recordingDevices.cameraError}
+                            micLevel={recordingDevices.micLevel}
+                            cameraStream={recordingDevices.cameraStream}
+                            locked={isScreenRecording}
+                            onSelectMic={recordingDevices.selectMic}
+                            onSelectCamera={recordingDevices.selectCamera}
+                        />
+                        <button onClick={startRecordingWithSetup} className="group relative flex items-center justify-center gap-3 px-6 py-4 bg-white text-black rounded-xl hover:bg-zinc-200 transition-all font-bold shadow-[0_0_20px_rgba(255,255,255,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)] hover:scale-[1.02]">
                             <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center group-hover:bg-red-200 transition-colors">
                                 <Circle size={14} className="fill-red-500 text-red-500 animate-pulse" />
                             </div>
@@ -485,12 +558,18 @@ const App: React.FC = () => {
             onAddSpotlight={handleAddSpotlight}
             onAddMosaic={handleAddMosaic}
             onInteractionStart={pushHistory}
-            isAudioTrackMuted={state.isAudioTrackMuted}
+            isAudioTrackMuted={mutedRoles.has('music')}
             onToggleAudioTrackMute={handleToggleAudioTrackMute}
+            narration={state.narration ?? null}
+            narrationClips={state.narrationClips ?? []}
+            mutedAudioRoles={[...mutedRoles]}
+            onSetAudioRoleMuted={handleSetAudioRoleMuted}
+            onToggleNarrationClipMute={handleToggleNarrationClipMute}
             onPreviewTime={handlePreviewTime} // New Prop
           />
         </div>
       </div>
+      {notice && <div role="status" data-testid="recording-notice" className="fixed bottom-24 right-8 max-w-sm bg-amber-950/95 border border-amber-700 text-amber-100 px-4 py-3 rounded-lg shadow-2xl text-sm z-[200]">{notice}<button className="ml-3 text-amber-300 hover:text-white" onClick={() => setNotice(null)} aria-label="Dismiss notice">×</button></div>}
       {state.showSuccessToast && <div className="fixed bottom-8 right-8 bg-zinc-900 border border-zinc-800 text-white px-4 py-3 rounded-lg shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-5 z-50"><CheckCircle className="text-emerald-500" size={20} /><div><h4 className="font-semibold text-sm">{state.toastMessage || "Export Complete!"}</h4></div></div>}
       {isResetting && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-sm z-[9999] flex items-center justify-center flex-col gap-6 animate-in fade-in duration-300">

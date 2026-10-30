@@ -9,7 +9,8 @@ interface UsePlaybackContextProps {
 export const usePlaybackContext = ({ state }: UsePlaybackContextProps) => {
     
     // Helper to resolve the actual MediaAsset based on the clip type
-    const getAsset = (mediaType: 'intro' | 'main' | 'outro' | 'audio') => {
+    const getAsset = (mediaType: Clip['mediaType']) => {
+        if (mediaType === 'narration') return state.narration ?? null;
         if (mediaType === 'intro') return state.intro;
         if (mediaType === 'outro') return state.outro;
         if (mediaType === 'audio') return state.audio;
@@ -53,7 +54,7 @@ export const usePlaybackContext = ({ state }: UsePlaybackContextProps) => {
                     src: asset.src,
                     time: computedTime,
                     playbackRate: state.playbackRate * activeVideoClip.speed,
-                    mediaType: activeVideoClip.mediaType,
+                    mediaType: activeVideoClip.mediaType as 'intro' | 'main' | 'outro' | 'audio',
                     muted: activeVideoClip.muted || false,
                     corsCompatible: asset.corsCompatible ?? true,
                     clipTiming: {

@@ -2,14 +2,24 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { SpotlightEffect, RecordingEvent } from '../types';
 import { generateId, formatTimeShort } from '../utils';
-import { useCaptureSession } from './useCaptureSession';
-import { sessionToMediaTime } from '../utils/captureClock';
+import { useCaptureSession, CaptureSourceSpec } from './useCaptureSession';
+import { sessionToMediaTime, companionTimeOffset } from '../utils/captureClock';
+import type { RecordingImportExtras } from './useAssetOperations';
+import { MIC_CONSTRAINTS, describeMediaError } from './useRecordingDevices';
+import { createMonoMicStream, MonoMic } from '../utils/monoMic';
 
 interface UseScreenRecorderProps {
-  onRecordingComplete: (blob: Blob, name: string, events: RecordingEvent[], durationHint?: number) => void;
+  onRecordingComplete: (blob: Blob, name: string, events: RecordingEvent[], durationHint?: number, extras?: RecordingImportExtras) => void;
+  /** #28: user-facing notices (microphone unavailable / disconnected). */
+  onNotice?: (message: string) => void;
 }
 
-export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProps) => {
+export interface StartRecordingOptions {
+  /** '' or undefined = microphone Off. */
+  micDeviceId?: string;
+}
+
+export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRecorderProps) => {
   const [isScreenRecording, setIsScreenRecording] = useState(false);
   const [recordingMarkersCount, setRecordingMarkersCount] = useState(0);
   const [capturedEventsCount, setCapturedEventsCount] = useState(0); 
@@ -24,6 +34,8 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
   // Internal Refs
   const captureSession = useCaptureSession();
   const finishingRef = useRef(false);
+  const micSettingsRef = useRef<{ sampleRate: number; channelCount: number; deviceSampleRate?: number; deviceChannelCount?: number } | null>(null);
+  const monoMicRef = useRef<MonoMic | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
   const recordingMarkersRef = useRef<number[]>([]);
   const recordingIntervalRef = useRef<any>(null);
@@ -99,6 +111,8 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
     if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
     try {
       const result = await captureSession.stop();
+      monoMicRef.current?.close();
+      monoMicRef.current = null;
       // Exit PiP if active
       if (document.pictureInPictureElement) {
         document.exitPictureInPicture().catch(() => { });
@@ -113,23 +127,43 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
       // from when its recorder was started (same reference the app used before #28).
       const events = recordingEventsRef.current.map(ev => ({ ...ev, time: sessionToMediaTime(ev.time, screen.requestedOffset) }));
       const durationHint = Math.max(0, screen.stopOffset - screen.requestedOffset);
+      // #28: microphone narration, aligned to the screen on the common session clock.
+      const mic = result.sources.find(src => src.id === 'mic');
+      const extras: RecordingImportExtras | undefined = mic && mic.blob.size > 0
+        ? { narration: { blob: mic.blob, timeOffset: companionTimeOffset(screen, mic), duration: Math.max(0, mic.stopOffset - mic.startOffset) } }
+        : undefined;
       if ((window as any).__FRAMECUT_E2E_ENABLED__) {
         (window as any).__FRAMECUT_LAST_CAPTURE__ = {
           sources: result.sources.map(src => ({ id: src.id, kind: src.kind, mimeType: src.mimeType, size: src.blob.size, requestedOffset: src.requestedOffset, startOffset: src.startOffset, stopOffset: src.stopOffset })),
+          narrationTimeOffset: extras?.narration?.timeOffset ?? null,
+          micSettings: micSettingsRef.current,
+          micBlob: mic?.blob ?? null,
           durationHint,
           eventCount: events.length,
         };
       }
       const timestamp = new Date().toLocaleTimeString().replace(/:/g, '-');
-      onRecordingComplete(screen.blob, `Screen Recording ${timestamp}`, events, durationHint);
+      onRecordingComplete(screen.blob, `Screen Recording ${timestamp}`, events, durationHint, extras);
     } finally {
       finishingRef.current = false;
     }
   }, [captureSession, onRecordingComplete]);
 
-  const handleStartScreenRecording = async () => {
+
+  const handleStartScreenRecording = async (options: StartRecordingOptions = {}) => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      // #28: the microphone is opened after the screen picker (keeps the user-gesture for the picker).
+      // If it fails, recording continues without narration and the user is told why.
+      let micStream: MediaStream | null = null;
+      micSettingsRef.current = null;
+      if (options.micDeviceId) {
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS(options.micDeviceId) });
+        } catch (e) {
+          onNotice?.(describeMediaError(e, 'Microphone') + ' Recording without narration.');
+        }
+      }
       recordingMarkersRef.current = [];
       recordingEventsRef.current = []; // Reset events
       setRecordingMarkersCount(0);
@@ -146,8 +180,27 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
 
       stream.getVideoTracks()[0].onended = () => { void finishSession(); };
 
-      // One session clock for every source (#28). Only the screen is recorded today.
-      captureSession.start([{ id: 'screen', kind: 'video', stream }]);
+      // One session clock for every source (#28).
+      const specs: CaptureSourceSpec[] = [{ id: 'screen', kind: 'video', stream }];
+      if (micStream) {
+        const micTrack = micStream.getAudioTracks()[0];
+        const device = micTrack?.getSettings?.() ?? {};
+        const mono = createMonoMicStream(micStream);
+        monoMicRef.current = mono;
+        micSettingsRef.current = {
+          sampleRate: mono?.sampleRate ?? (device.sampleRate as number),
+          channelCount: mono?.channelCount ?? (device.channelCount as number),
+          deviceSampleRate: device.sampleRate as number | undefined,
+          deviceChannelCount: device.channelCount as number | undefined,
+        };
+        // Disconnect: stop only the microphone; keep what it recorded; screen continues.
+        micTrack?.addEventListener('ended', () => {
+          captureSession.stopSource('mic');
+          onNotice?.('Microphone disconnected. Narration was kept up to that point; the screen is still recording.');
+        });
+        specs.push({ id: 'mic', kind: 'audio', stream: mono?.stream ?? micStream });
+      }
+      captureSession.start(specs);
       recordingStartTimeRef.current = performance.now();
       setIsScreenRecording(true);
     } catch (err: any) {

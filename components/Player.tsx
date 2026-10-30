@@ -84,6 +84,11 @@ interface PlayerProps {
   
   audioSrc: string | null;
   audioPlaybackRate: number;
+  /** #28: microphone narration (A2), played in sync with the linked screen clips. */
+  narrationSrc?: string | null;
+  narrationClips?: Clip[];
+  narrationTimeOffset?: number;
+  isNarrationMuted?: boolean;
 
   allSubtitles: Subtitle[]; 
   selectedSubtitleId: string | null; 
@@ -149,6 +154,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   isMuted = false,
   corsCompatible = true,
   audioSrc,
+  narrationSrc = null,
+  narrationClips = [],
+  narrationTimeOffset = 0,
+  isNarrationMuted = false,
   audioPlaybackRate,
   allSubtitles,
   selectedSubtitleId,
@@ -259,6 +268,12 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const outroSrcRef = useRef(outroSrc);
   const activeClipsRef = useRef(activeClips);
   const audioClipsRef = useRef(audioClips);
+  const narrationRef = useRef<HTMLAudioElement>(null);
+  const narrationClipsRef = useRef<Clip[]>([]);
+  const narrationTimeOffsetRef = useRef(narrationTimeOffset);
+  narrationTimeOffsetRef.current = narrationTimeOffset;
+  const isNarrationMutedRef = useRef(isNarrationMuted);
+  isNarrationMutedRef.current = isNarrationMuted;
 
   // Sync Props to Refs
   useEffect(() => { srcRef.current = src; }, [src]);
@@ -283,7 +298,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useEffect(() => { selectedSpotlightEffectRef.current = selectedSpotlightEffect; }, [selectedSpotlightEffect]);
   useEffect(() => { selectedMosaicEffectRef.current = selectedMosaicEffect; }, [selectedMosaicEffect]);
   
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+    if (!isPlaying) narrationRef.current?.pause();
+  }, [isPlaying]);
   useEffect(() => { coverImageRef.current = coverImage; }, [coverImage]);
   useEffect(() => { isExportingRef.current = isExporting; }, [isExporting]);
   useEffect(() => { activeClipIdRef.current = activeClipId; }, [activeClipId]);
@@ -316,6 +334,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   useEffect(() => {
     audioClipsRef.current = audioClips ? [...audioClips].sort((a, b) => a.offset - b.offset) : audioClips;
   }, [audioClips]);
+  useEffect(() => {
+    narrationClipsRef.current = [...(narrationClips ?? [])].sort((a, b) => a.offset - b.offset);
+  }, [narrationClips]);
 
   const { 
       subDragState,
@@ -626,6 +647,31 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
               }
           } else {
               if (!audioEl.paused) audioEl.pause();
+          }
+      }
+
+      // #28: narration (A2). Clip times are screen-source times; media = source - timeOffset.
+      const narrationEl = narrationRef.current;
+      if (narrationEl && narrationEl.src) {
+          const clip = findActiveClip(narrationClipsRef.current, time);
+          const sourceTime = clip ? clip.sourceStart + (time - clip.offset) * clip.speed : 0;
+          const mediaTime = clip ? sourceTime - narrationTimeOffsetRef.current : -1;
+          const mediaDuration = Number.isFinite(narrationEl.duration) ? narrationEl.duration : Infinity;
+          if (clip && mediaTime >= 0 && mediaTime < mediaDuration) {
+              narrationEl.muted = isNarrationMutedRef.current || !!clip.muted;
+              narrationEl.playbackRate = playbackRateRef.current * clip.speed;
+              const diff = Math.abs(narrationEl.currentTime - mediaTime);
+              const driftThreshold = isPlayingRef.current ? 0.3 : 0.05;
+              if (diff > driftThreshold && narrationEl.readyState >= 1 && !(!isPlayingRef.current && narrationEl.seeking)) {
+                  narrationEl.currentTime = mediaTime;
+              }
+              if (isPlayingRef.current && narrationEl.paused && narrationEl.readyState >= 2) {
+                  narrationEl.play().catch(() => {});
+              } else if (!isPlayingRef.current && !narrationEl.paused) {
+                  narrationEl.pause();
+              }
+          } else if (!narrationEl.paused) {
+              narrationEl.pause();
           }
       }
   };
@@ -1207,6 +1253,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       {mainSrc && !mainSrc.startsWith('color:') && !mainSrc.startsWith('image:') && <video ref={mainVideoRef} src={mainSrc} className="hidden" onLoadedMetadata={handleLoadedMetadata} playsInline muted={isMuted} crossOrigin="anonymous" />}
       {outroSrc && !outroSrc.startsWith('color:') && !outroSrc.startsWith('image:') && <video ref={outroVideoRef} src={outroSrc} className="hidden" onLoadedMetadata={handleLoadedMetadata} playsInline muted={isMuted} crossOrigin="anonymous" />}
       <audio ref={audioRef} src={audioSrc || undefined} className="hidden" crossOrigin="anonymous" />
+      <audio ref={narrationRef} src={narrationSrc || undefined} className="hidden" preload="auto" data-testid="narration-audio" />
 
       <div 
         ref={contentRef} 
