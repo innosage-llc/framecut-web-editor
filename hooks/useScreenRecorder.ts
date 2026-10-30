@@ -303,6 +303,8 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       setIsScreenRecording(true);
     } catch (err: any) {
       console.error("Screen recording cancelled or failed", err);
+      probesRef.current?.stop();
+      probesRef.current = null;
       // Never leave a live screen share behind after a failed start.
       stream?.getTracks().forEach(t => { t.onended = null; try { t.stop(); } catch { /* ignore */ } });
       sessionStreamRef.current = null;
