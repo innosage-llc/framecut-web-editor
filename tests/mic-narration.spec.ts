@@ -439,4 +439,78 @@ test.describe('QA warnings', () => {
     expect(r.liveMicTracks).toBe(0);
     expect(r.openContexts).toBe(0);
   });
+
+  test('mid-recording mic disconnect stops the mic recorder tracks while the screen keeps recording', async ({ page }) => {
+    await boot(page, () => {
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      (window as any).__micTracks = [];
+      navigator.mediaDevices.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.audio) (window as any).__micTracks.push(s.getAudioTracks()[0]); return s; };
+      const Orig = window.MediaRecorder;
+      (window as any).__recStreams = [];
+      (window as any).MediaRecorder = class extends Orig { constructor(st: MediaStream, o?: any) { super(st, o); (window as any).__recStreams.push(st); } };
+    });
+    const mic = page.getByRole('combobox', { name: 'Microphone' });
+    await mic.selectOption(await mic.locator('option').nth(1).getAttribute('value') as string);
+    await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    await page.getByRole('button', { name: 'Start Recording' }).click();
+    await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => { const t = (window as any).__micTracks.at(-1) as MediaStreamTrack; t.stop(); t.dispatchEvent(new Event('ended')); });
+    await expect(page.getByTestId('recording-notice')).toContainText('Microphone disconnected');
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => {
+      const ss = (window as any).__recStreams as MediaStream[];
+      const audioOnly = ss.filter(s => s.getVideoTracks().length === 0);
+      const video = ss.filter(s => s.getVideoTracks().length > 0);
+      return {
+        micLive: audioOnly.flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length,
+        micCount: audioOnly.length,
+        screenLive: video.flatMap(s => s.getVideoTracks()).filter(t => t.readyState === 'live').length,
+      };
+    });
+    expect(r.micCount).toBeGreaterThan(0);
+    expect(r.micLive).toBe(0);
+    expect(r.screenLive).toBeGreaterThan(0);
+    await page.getByRole('button', { name: 'Stop Sharing' }).click();
+  });
+
+  test("a previous session's mic 'ended' does not cut the next recording's narration", async ({ page }) => {
+    await boot(page, () => {
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      (window as any).__micTracks = [];
+      navigator.mediaDevices.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.audio) (window as any).__micTracks.push(s.getAudioTracks()[0]); return s; };
+    });
+    const mic = page.getByRole('combobox', { name: 'Microphone' });
+    await mic.selectOption(await mic.locator('option').nth(1).getAttribute('value') as string);
+    await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    const record = async (ms: number, during?: () => Promise<void>) => {
+      await page.getByRole('button', { name: 'Start Recording' }).click();
+      await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
+      await page.waitForTimeout(ms / 2);
+      if (during) await during();
+      await page.waitForTimeout(ms / 2);
+      await page.getByRole('button', { name: 'Stop Sharing' }).click();
+      await expect(page.getByRole('button', { name: 'Stop Sharing' })).toHaveCount(0, { timeout: 15000 });
+    };
+    await record(1500);
+    await page.waitForFunction(() => (window as any).__FRAMECUT_LAST_CAPTURE__, null, { timeout: 15000 });
+    const firstTracks = await page.evaluate(() => { const w = window as any; w.__firstCap = w.__FRAMECUT_LAST_CAPTURE__; w.__oldTracks = [...w.__micTracks]; return w.__oldTracks.length; });
+    expect(firstTracks).toBeGreaterThan(0);
+    await page.locator('[title="Remove"]').first().click();
+    await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 5000 });
+    if ((await mic.inputValue()) === '') {
+      await mic.selectOption(await mic.locator('option').nth(1).getAttribute('value') as string);
+      await expect(page.getByRole('meter', { name: 'Microphone level' })).toBeVisible();
+    }
+    await record(3000, async () => {
+      await page.evaluate(() => { for (const t of (window as any).__oldTracks as MediaStreamTrack[]) t.dispatchEvent(new Event('ended')); });
+    });
+    await page.waitForFunction(() => (window as any).__FRAMECUT_LAST_CAPTURE__ !== (window as any).__firstCap, null, { timeout: 15000 });
+    const cap = await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__);
+    const screen = cap.sources.find((x: any) => x.id === 'screen');
+    const micSrc = cap.sources.find((x: any) => x.id === 'mic');
+    expect(micSrc).toBeTruthy();
+    expect(Math.abs(micSrc.stopOffset - screen.stopOffset)).toBeLessThan(0.5);
+    await expect(page.getByTestId('recording-notice')).toHaveCount(0);
+  });
 });
