@@ -37,12 +37,24 @@ export interface SourceTiming {
 }
 
 /**
- * Best estimate of when a source's media time 0 happened on the session clock: the recorder's
- * `start` event when it is plausible (fired before the source stopped), else the start() call.
- * Chromium can delay `start` until stop for a source that produced no data (see PR-A).
+ * A `start` event this much later than start() means the source really began late (e.g. a cold
+ * audio device); smaller lags are encoder latency, not a later media start.
+ */
+export const LATE_START_S = 0.25;
+
+/**
+ * Best estimate of when a source's media time 0 happened on the session clock.
+ *
+ * Chromium fires `start` after the first chunk has been *encoded*, so the event lags the first
+ * captured sample by the encoder latency (≈50 ms for Opus, ≈100 ms for VP9, varying by tens of ms
+ * between sessions), while the recording's media time 0 is the first captured sample, which for a
+ * live track arrives right after start(). Using the event therefore added ±25 ms of jitter between
+ * sources (QA PR-B sync WARN). So: the start() call, unless the event shows the source genuinely
+ * started late (and plausibly: before it stopped; Chromium can delay `start` until stop for a source
+ * that produced no data, see PR-A).
  */
 export const mediaStartOf = (t: SourceTiming): number =>
-  t.startOffset >= t.requestedOffset && t.startOffset < t.stopOffset - 0.05 ? t.startOffset : t.requestedOffset;
+  t.startOffset - t.requestedOffset > LATE_START_S && t.startOffset < t.stopOffset - 0.05 ? t.startOffset : t.requestedOffset;
 
 /**
  * #28: offset of a companion source (mic) relative to the screen, in seconds of screen-source time.

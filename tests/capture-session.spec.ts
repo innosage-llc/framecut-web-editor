@@ -202,6 +202,10 @@ test('a recorder whose onstop never fires does not hang Stop', async ({ page }) 
   expect(Date.now() - t0).toBeLessThan(8000);
   await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeHidden();
   expect(await liveTracks(page)).toBe(0);
+  // QA W1: the clip ends at the Stop time, not when the 4 s timeout fired.
+  const cap = await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__);
+  expect(cap.durationHint).toBeGreaterThan(1.0);
+  expect(cap.durationHint).toBeLessThan(2.2);
 });
 
 test('events and markers are on the screen recording timeline (late recorder start, marker)', async ({ page }) => {
@@ -243,4 +247,131 @@ test("a finished session's stream firing ended later does not stop the next reco
   await page.getByRole('button', { name: 'Stop Sharing' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__.completedCount)).toBe(2);
   expect(await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__.durationHint)).toBeGreaterThan(1.8);
+});
+
+// ---- #28 QA W1/W2: each safeguard of the session on its own (fake recorders, no hook) ----
+
+/** Runs `body` in the page with createCaptureSession, a scriptable FakeRecorder and fake streams. */
+async function withSession(page: any, body: string, arg: any = {}) {
+  await page.goto('/');
+  return page.evaluate(async ({ body, arg }: any) => {
+    // @ts-ignore in-page Vite module
+    const m = await import('/hooks/useCaptureSession.ts');
+    const plans: any[] = arg.plans ?? [];
+    const recs: any[] = [];
+    class FakeRecorder {
+      static isTypeSupported() { return true; }
+      state = 'inactive'; mimeType: string; stopCalls = 0; plan: any;
+      onstart: any; onstop: any; onerror: any; ondataavailable: any;
+      constructor(public stream: any, o?: any) { this.mimeType = o?.mimeType ?? ''; this.plan = plans[recs.length] ?? {}; recs.push(this); }
+      start() {
+        if (this.plan.startThrows) throw new DOMException('fake start failed', 'InvalidStateError');
+        this.state = 'recording'; setTimeout(() => this.onstart?.(), 0);
+      }
+      stop() {
+        this.stopCalls++;
+        if (this.plan.stopThrows) throw new DOMException('fake stop failed', 'InvalidStateError');
+        this.state = 'inactive';
+        if (this.plan.errorInsteadOfStop) { setTimeout(() => this.onerror?.(new Event('error')), 10); return; }
+        if (this.plan.noOnstop) return;
+        setTimeout(() => { this.ondataavailable?.({ data: new Blob(['x']) }); this.onstop?.(); }, 10);
+      }
+    }
+    const stream = (n = 2) => {
+      const tracks = Array.from({ length: n }, () => ({ readyState: 'live', stop() { this.readyState = 'ended'; } }));
+      return { getTracks: () => tracks, tracks };
+    };
+    const live = (s: any) => s.tracks.filter((t: any) => t.readyState === 'live').length;
+    const fn = new Function('m', 'FakeRecorder', 'recs', 'stream', 'live', 'arg', `return (async () => { ${body} })();`);
+    return fn(m, FakeRecorder, recs, stream, live, arg);
+  }, { body, arg });
+}
+
+test('session: a failed start stops every track of its sources by itself (QA N1)', async ({ page }) => {
+  const r = await withSession(page, `
+    const s = m.createCaptureSession({ MediaRecorder: FakeRecorder });
+    const a = stream(2);
+    let threw = false;
+    try { s.start([{ id: 'screen', kind: 'video', stream: a }]); } catch { threw = true; }
+    return { threw, live: live(a), active: s.isActive(), stop: await s.stop() };
+  `, { plans: [{ startThrows: true }] });
+  expect(r).toEqual({ threw: true, live: 0, active: false, stop: null });
+});
+
+test('session: when a later source fails to start, the already started recorder is stopped (QA N3)', async ({ page }) => {
+  const r = await withSession(page, `
+    const s = m.createCaptureSession({ MediaRecorder: FakeRecorder });
+    const a = stream(2), b = stream(1);
+    try { s.start([{ id: 'screen', kind: 'video', stream: a }, { id: 'mic', kind: 'audio', stream: b }]); } catch {}
+    return { screenState: recs[0].state, screenStops: recs[0].stopCalls, liveA: live(a), liveB: live(b) };
+  `, { plans: [{}, { startThrows: true }] });
+  expect(r).toEqual({ screenState: 'inactive', screenStops: 1, liveA: 0, liveB: 0 });
+});
+
+test('session: concurrent stop() calls produce one result; the second gets null (QA N5)', async ({ page }) => {
+  const r = await withSession(page, `
+    const s = m.createCaptureSession({ MediaRecorder: FakeRecorder });
+    s.start([{ id: 'screen', kind: 'video', stream: stream() }]);
+    await new Promise(r => setTimeout(r, 50));
+    const [x, y] = await Promise.all([s.stop(), s.stop()]);
+    return { first: x ? x.sources.length : null, second: y, stops: recs[0].stopCalls };
+  `);
+  expect(r).toEqual({ first: 1, second: null, stops: 1 });
+});
+
+test('session: recorder.stop() throwing still finishes Stop promptly (QA N7)', async ({ page }) => {
+  const r = await withSession(page, `
+    const s = m.createCaptureSession({ MediaRecorder: FakeRecorder });
+    const a = stream();
+    s.start([{ id: 'screen', kind: 'video', stream: a }]);
+    await new Promise(r => setTimeout(r, 50));
+    const t = performance.now();
+    const res = await s.stop();
+    return { ms: performance.now() - t, sources: res.sources.length, live: live(a) };
+  `, { plans: [{ stopThrows: true }] });
+  expect(r.sources).toBe(1);
+  expect(r.live).toBe(0);
+  expect(r.ms).toBeLessThan(500); // default 4 s timeout must not be what ends it
+});
+
+test('session: a recorder error instead of onstop finishes Stop promptly (QA N9)', async ({ page }) => {
+  const r = await withSession(page, `
+    const s = m.createCaptureSession({ MediaRecorder: FakeRecorder });
+    s.start([{ id: 'screen', kind: 'video', stream: stream() }]);
+    await new Promise(r => setTimeout(r, 50));
+    const t = performance.now();
+    const res = await s.stop();
+    return { ms: performance.now() - t, sources: res.sources.length };
+  `, { plans: [{ errorInsteadOfStop: true }] });
+  expect(r.sources).toBe(1);
+  expect(r.ms).toBeLessThan(500);
+});
+
+test('session: on the onstop-timeout path the stop offset is the session stop time, not the timeout (QA W1)', async ({ page }) => {
+  const r = await withSession(page, `
+    const s = m.createCaptureSession({ MediaRecorder: FakeRecorder, stopTimeoutMs: 1500 });
+    s.start([{ id: 'screen', kind: 'video', stream: stream() }]);
+    await new Promise(r => setTimeout(r, 400));
+    const res = await s.stop();
+    const src = res.sources[0];
+    return { duration: src.stopOffset - src.requestedOffset };
+  `, { plans: [{ noOnstop: true }] });
+  expect(r.duration).toBeGreaterThan(0.35);
+  expect(r.duration).toBeLessThan(0.6); // the timeout fires at ~1.9 s
+});
+
+test('hook: a failure before the session starts still stops the screen share (QA N11)', async ({ page }) => {
+  await bootCapture(page);
+  await page.evaluate(() => {
+    const orig = window.setInterval;
+    let armed = true;
+    (window as any).setInterval = (fn: any, ms?: number, ...rest: any[]) => {
+      if (armed && ms === 1000) { armed = false; throw new Error('E2E: timer failed'); }
+      return orig(fn, ms, ...rest);
+    };
+  });
+  await page.getByRole('button', { name: 'Start Recording' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__alerts.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__streams.length)).toBe(1);
+  expect(await liveTracks(page)).toBe(0);
 });
