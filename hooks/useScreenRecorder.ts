@@ -8,7 +8,7 @@ import type { RecordingImportExtras } from './useAssetOperations';
 import { MIC_CONSTRAINTS, CAMERA_CONSTRAINTS, describeMediaError } from './useRecordingDevices';
 import { createMonoMicStream, MonoMic } from '../utils/monoMic';
 import { rebaseWebmToAudioStart } from '../utils/webmAudioLead';
-import { dryRunRecorders } from '../utils/recorderWarmup';
+import { cancelCapturePreflight } from '../utils/capturePreflight';
 
 interface UseScreenRecorderProps {
   onRecordingComplete: (blob: Blob, name: string, events: RecordingEvent[], durationHint?: number, extras?: RecordingImportExtras) => void;
@@ -185,6 +185,9 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
     let cameraStream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      // The preflight warm-up may run on through the source picker but never delays recording:
+      // if it's still running now, drop it.
+      cancelCapturePreflight();
       // #28: the microphone is opened after the screen picker (keeps the user-gesture for the picker).
       // If it fails, recording continues without narration and the user is told why.
       micSettingsRef.current = null;
@@ -235,8 +238,6 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           mono = createMonoMicStream(micStream, { rewarm: true });
           monoMicRef.current = mono;
           if (mono) await mono.ready;
-          // The first screen + narration recorders in a renderer also start unevenly; run a throwaway pair.
-          if (mono) await dryRunRecorders([{ stream, kind: 'video' }, { stream: mono.stream, kind: 'audio' }]);
         }
         micFlowingRef.current = !!mono?.flowing();
         micSettingsRef.current = {

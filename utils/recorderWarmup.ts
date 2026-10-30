@@ -11,7 +11,7 @@ export const DRY_RUN_TAIL_MS = 600;
  * sessions still drifted; with the tail, 1 of 10 under full CPU load). Never throws; gives up after
  * `timeoutMs`.
  */
-export const dryRunRecorders = (streams: { stream: MediaStream; kind: 'video' | 'audio' }[], timeoutMs = 3000): Promise<void> =>
+export const dryRunRecorders = (streams: { stream: MediaStream; kind: 'video' | 'audio' }[], timeoutMs = 3000, signal?: AbortSignal): Promise<void> =>
   new Promise<void>((resolve) => {
     const recs: MediaRecorder[] = [];
     const clones: MediaStream[] = [];
@@ -23,6 +23,8 @@ export const dryRunRecorders = (streams: { stream: MediaStream; kind: 'video' | 
       resolve();
     };
     const timer = setTimeout(done, timeoutMs);
+    if (signal?.aborted) { done(); return; }
+    signal?.addEventListener('abort', done, { once: true });
     try {
       if (typeof MediaRecorder === 'undefined') { done(); return; }
       for (const { stream, kind } of streams) {
@@ -32,6 +34,7 @@ export const dryRunRecorders = (streams: { stream: MediaStream; kind: 'video' | 
         const rec = type ? new MediaRecorder(clone, { mimeType: type }) : new MediaRecorder(clone);
         rec.onstart = () => { if (--pending <= 0) setTimeout(done, DRY_RUN_TAIL_MS); };
         rec.onerror = done;
+        rec.ondataavailable = null; // output discarded
         recs.push(rec);
       }
       recs.forEach(r => r.start());
