@@ -56,7 +56,12 @@ test(`narration lands within ${TOL_MS} ms of the screen audio in every one of ${
       const near = screenOn.reduce((a, b) => (Math.abs(b - t) < Math.abs(a - t) ? b : a), Infinity);
       return (t - near) * 1000;
     }).filter(e => Math.abs(e) < 250);
-    expect(pairs.length, `session ${i}: no matched beeps (screen ${screenOn}, mic ${micOn})`).toBeGreaterThan(0);
+    // Every narration beep must pair with a screen beep (≥ 2 per second recorded); a partial match is a
+    // broken capture or measurement, not a sync result, so it fails loudly instead of being averaged.
+    // Only beeps that land inside the screen recording can match (one before its first beep can't).
+    const inside = micOn.map(m => m + cap.narrationTimeOffset).filter(t => t >= screenOn[0] - 0.25 && t <= screenOn[screenOn.length - 1] + 0.25);
+    expect(inside.length, `session ${i}: too few narration beeps (mic ${micOn})`).toBeGreaterThanOrEqual(4);
+    expect(pairs.length, `session ${i}: only ${pairs.length} of ${inside.length} narration beeps matched (screen ${screenOn}, mic ${micOn})`).toBeGreaterThanOrEqual(inside.length);
     const err = pairs.reduce((a, b) => a + b, 0) / pairs.length;
     errs.push(err);
     rows.push({ session: i, errMs: +err.toFixed(1), beeps: pairs.length, narrationTimeOffset: cap.narrationTimeOffset, sources: cap.sources });
