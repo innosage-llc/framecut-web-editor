@@ -44,45 +44,75 @@ interface ActiveRecorder {
   requestedMime: string;
   requestedOffset: number;
   startOffset: number | null;
+  /** recorder.start() returned without throwing. A recorder that never started never fires onstop. */
+  started: boolean;
   done: Promise<CapturedSource>;
+  finish: () => void;
 }
+
+const stopTracks = (specs: CaptureSourceSpec[]) => {
+  for (const s of specs) s.stream.getTracks().forEach(t => { try { t.stop(); } catch { /* ignore */ } });
+};
+
+/** Upper bound for a recorder's onstop after stop(); keeps Stop from hanging on an engine bug. */
+const STOP_TIMEOUT_MS = 4000;
 
 export const useCaptureSession = () => {
   const clockRef = useRef<CaptureClock | null>(null);
   const activeRef = useRef<ActiveRecorder[]>([]);
 
-  /** Start all recorders in the same task, on a fresh clock. Throws if any recorder fails to construct. */
+  /**
+   * Start all recorders in the same task, on a fresh clock. If any recorder fails to construct or
+   * start, everything is torn down (started recorders stopped, every track of every source stopped,
+   * session cleared) and the error is rethrown, so a failed start never leaves a live capture behind.
+   */
   const start = useCallback((specs: CaptureSourceSpec[]): CaptureClock => {
     const clock = createCaptureClock();
-    clockRef.current = clock;
-    const active: ActiveRecorder[] = specs.map(spec => {
-      const requestedMime = pickRecorderMimeType(spec.kind);
-      const recorder = requestedMime ? new MediaRecorder(spec.stream, { mimeType: requestedMime }) : new MediaRecorder(spec.stream);
-      const entry = { spec, recorder, chunks: [] as Blob[], requestedMime, requestedOffset: 0, startOffset: null as number | null } as ActiveRecorder;
-      entry.done = new Promise<CapturedSource>((resolve) => {
-        recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) entry.chunks.push(e.data); };
-        recorder.onstart = () => { entry.startOffset = clock.now(); };
-        recorder.onstop = () => {
-          const stopOffset = clock.now();
-          const mimeType = blobTypeFor(spec.kind, recorder.mimeType, requestedMime);
-          resolve({
-            id: spec.id,
-            kind: spec.kind,
-            blob: new Blob(entry.chunks, { type: mimeType }),
-            mimeType,
-            requestedOffset: entry.requestedOffset,
-            startOffset: entry.startOffset ?? entry.requestedOffset,
-            stopOffset,
-          });
-        };
-      });
-      return entry;
-    });
-    activeRef.current = active;
-    for (const a of active) {
-      a.requestedOffset = clock.now();
-      a.recorder.start();
+    const active: ActiveRecorder[] = [];
+    try {
+      for (const spec of specs) {
+        const requestedMime = pickRecorderMimeType(spec.kind);
+        const recorder = requestedMime ? new MediaRecorder(spec.stream, { mimeType: requestedMime }) : new MediaRecorder(spec.stream);
+        const entry = { spec, recorder, chunks: [] as Blob[], requestedMime, requestedOffset: 0, startOffset: null as number | null, started: false } as ActiveRecorder;
+        entry.done = new Promise<CapturedSource>((resolve) => {
+          let settled = false;
+          entry.finish = () => {
+            if (settled) return;
+            settled = true;
+            const stopOffset = clock.now();
+            const mimeType = blobTypeFor(spec.kind, recorder.mimeType, requestedMime);
+            resolve({
+              id: spec.id,
+              kind: spec.kind,
+              blob: new Blob(entry.chunks, { type: mimeType }),
+              mimeType,
+              requestedOffset: entry.requestedOffset,
+              startOffset: entry.startOffset ?? entry.requestedOffset,
+              stopOffset,
+            });
+          };
+          recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) entry.chunks.push(e.data); };
+          recorder.onstart = () => { entry.startOffset = clock.now(); };
+          recorder.onstop = () => entry.finish();
+          recorder.onerror = () => { if (recorder.state === 'inactive') entry.finish(); };
+        });
+        active.push(entry);
+      }
+      for (const a of active) {
+        a.requestedOffset = clock.now();
+        a.recorder.start();
+        a.started = true;
+      }
+    } catch (e) {
+      for (const a of active) {
+        if (a.started && a.recorder.state !== 'inactive') { try { a.recorder.stop(); } catch { /* ignore */ } }
+        a.finish();
+      }
+      stopTracks(specs);
+      throw e;
     }
+    clockRef.current = clock;
+    activeRef.current = active;
     return clock;
   }, []);
 
@@ -91,13 +121,25 @@ export const useCaptureSession = () => {
     const clock = clockRef.current;
     const active = activeRef.current;
     if (!clock || active.length === 0) return null;
-    for (const a of active) {
-      if (a.recorder.state !== 'inactive') a.recorder.stop();
-    }
-    const sources = await Promise.all(active.map(a => a.done));
+    // Claim the session first so a concurrent stop() (Stop button + track `ended`) gets null.
     activeRef.current = [];
-    for (const a of active) a.spec.stream.getTracks().forEach(t => t.stop());
-    return { clock, sources };
+    clockRef.current = null;
+    for (const a of active) {
+      if (a.recorder.state !== 'inactive') {
+        try { a.recorder.stop(); } catch { a.finish(); }
+      } else if (!a.started) {
+        a.finish(); // never started: no onstop will come
+      }
+    }
+    // A recorder whose onstop never arrives must not hang Stop forever.
+    const timer = setTimeout(() => active.forEach(a => a.finish()), STOP_TIMEOUT_MS);
+    try {
+      const sources = await Promise.all(active.map(a => a.done));
+      return { clock, sources };
+    } finally {
+      clearTimeout(timer);
+      stopTracks(active.map(a => a.spec));
+    }
   }, []);
 
   /** Session seconds since start (0 when idle). */

@@ -24,6 +24,8 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
   // Internal Refs
   const captureSession = useCaptureSession();
   const finishingRef = useRef(false);
+  /** Identifies the live session; stale `ended` handlers from an earlier stream are ignored. */
+  const sessionStreamRef = useRef<MediaStream | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
   const recordingMarkersRef = useRef<number[]>([]);
   const recordingIntervalRef = useRef<any>(null);
@@ -96,6 +98,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
   const finishSession = useCallback(async () => {
     if (finishingRef.current) return;
     finishingRef.current = true;
+    sessionStreamRef.current = null;
     if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
     try {
       const result = await captureSession.stop();
@@ -118,6 +121,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
           sources: result.sources.map(src => ({ id: src.id, kind: src.kind, mimeType: src.mimeType, size: src.blob.size, requestedOffset: src.requestedOffset, startOffset: src.startOffset, stopOffset: src.stopOffset })),
           durationHint,
           eventCount: events.length,
+          completedCount: ((window as any).__FRAMECUT_LAST_CAPTURE__?.completedCount ?? 0) + 1,
         };
       }
       const timestamp = new Date().toLocaleTimeString().replace(/:/g, '-');
@@ -128,8 +132,9 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
   }, [captureSession, onRecordingComplete]);
 
   const handleStartScreenRecording = async () => {
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       recordingMarkersRef.current = [];
       recordingEventsRef.current = []; // Reset events
       setRecordingMarkersCount(0);
@@ -144,14 +149,20 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
         setRecordingDuration(d => d + 1);
       }, 1000);
 
-      stream.getVideoTracks()[0].onended = () => { void finishSession(); };
-
       // One session clock for every source (#28). Only the screen is recorded today.
+      // start() tears everything down itself and throws if a recorder can't start.
       captureSession.start([{ id: 'screen', kind: 'video', stream }]);
+      const sessionStream = stream;
+      sessionStreamRef.current = sessionStream;
+      // Only the live session's stream may end it (a stale stream from a failed start must not).
+      stream.getVideoTracks()[0].onended = () => { if (sessionStreamRef.current === sessionStream) void finishSession(); };
       recordingStartTimeRef.current = performance.now();
       setIsScreenRecording(true);
     } catch (err: any) {
       console.error("Screen recording cancelled or failed", err);
+      // Never leave a live screen share behind after a failed start.
+      stream?.getTracks().forEach(t => { t.onended = null; try { t.stop(); } catch { /* ignore */ } });
+      sessionStreamRef.current = null;
       setIsScreenRecording(false);
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
       
