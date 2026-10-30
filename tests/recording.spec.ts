@@ -22,7 +22,7 @@ test('capture a screen recording for 5 seconds', async ({ page }) => {
     // 6. Verify transition to Editor
     // Give it a bit more time and look for the filename or the canvas
     try {
-        await expect(page.locator('canvas').first()).toBeVisible({ timeout: 15000 });
+        await expect(page.locator('canvas:not(.hidden)').first()).toBeVisible({ timeout: 15000 });
         await expect(page.locator('text=Recording')).toBeVisible({ timeout: 5000 });
     } catch (e) {
         await page.screenshot({ path: 'test-failure.png' });
