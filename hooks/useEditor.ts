@@ -9,7 +9,7 @@ import { linkedCompanions } from '../utils/linkedRecordingClips';
 import type { AudioRole } from '../types';
 import { useClipOperations } from './useClipOperations';
 
-type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'narration' | 'duration' | 'clips' | 'audioClips' | 'narrationClips' | 'mutedAudioRoles' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
+type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'narration' | 'camera' | 'duration' | 'clips' | 'audioClips' | 'narrationClips' | 'mutedAudioRoles' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
 
 // 定义存储键名 (必须与 useProjectPersistence 保持一致)
 const STORAGE_KEY = 'framecut-project-v1';
@@ -22,6 +22,7 @@ const defaultState: ExtendedEditorState = {
     outro: null,
     audio: null,
     narration: null,
+    camera: null,
     duration: 0,
     currentTime: 0,
     isPlaying: false,
@@ -148,6 +149,7 @@ export const useEditor = () => {
         outro: fullState.outro,
         audio: fullState.audio,
         narration: fullState.narration ?? null,
+        camera: fullState.camera ?? null,
         duration: fullState.duration,
         clips: fullState.clips,
         audioClips: fullState.audioClips,

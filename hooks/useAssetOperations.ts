@@ -1,4 +1,5 @@
 
+import { DEFAULT_CAMERA_BUBBLE } from '../utils/cameraBubble';
 import React, { Dispatch, SetStateAction, useCallback } from 'react';
 import { MediaAsset, Clip, SpotlightEffect, ExtendedEditorState, RecordingEvent } from '../types';
 import { generateId, getVideoDuration, extractWaveform } from '../utils';
@@ -27,6 +28,8 @@ interface UseAssetOperationsProps {
 /** #28: extra sources recorded with the screen. */
 export interface RecordingImportExtras {
     narration?: { blob: Blob; timeOffset: number; duration: number };
+    /** #28: camera recorded with the screen; drawn as a bubble on the screen clip. */
+    camera?: { blob: Blob; timeOffset: number; duration: number };
 }
 
 export const useAssetOperations = ({ setState, pushHistory, recalculateDuration, currentTimeRef, stateRef }: UseAssetOperationsProps) => {
@@ -353,6 +356,32 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
                 initialClip.recordingLinkID = linkId;
                 narrationClips = [{ ...initialClip, id: generateId(), mediaType: 'narration', recordingLinkID: linkId, muted: false }];
             }
+            // #28: camera. Stored as an asset; the bubble (macOS defaults) lives on the screen clip.
+            let cameraAsset: MediaAsset | null = null;
+            if (extras?.camera && extras.camera.blob.size > 0) {
+                const c = extras.camera;
+                let cameraStorageId: string | undefined = generateId();
+                try {
+                    await storeAssetInDB(cameraStorageId, c.blob);
+                    stagedStorageIds.push(cameraStorageId);
+                } catch (e) {
+                    console.error("Failed to store camera in DB", e);
+                    cameraStorageId = undefined;
+                }
+                const cameraUrl = URL.createObjectURL(c.blob);
+                stagedUrls.push(cameraUrl);
+                cameraAsset = {
+                    id: generateId(),
+                    src: cameraUrl,
+                    name: `${name} (Camera)`,
+                    duration: Math.max(0, c.duration),
+                    corsCompatible: true,
+                    storageId: cameraStorageId,
+                    timeOffset: c.timeOffset,
+                };
+                if (!initialClip.recordingLinkID) initialClip.recordingLinkID = generateId();
+                initialClip.cameraBubble = { ...DEFAULT_CAMERA_BUBBLE };
+            }
             if ((window as any).__FRAMECUT_E2E_ENABLED__ && (window as any).__FRAMECUT_E2E_FAIL_IMPORT__) {
                 throw new Error('E2E: simulated import failure');
             }
@@ -396,6 +425,7 @@ export const useAssetOperations = ({ setState, pushHistory, recalculateDuration,
                     audio: null,
                     narration: narrationAsset,
                     narrationClips,
+                    camera: cameraAsset,
                     fileName: name,
                     currentTime: 0,
                     isPlaying: false,

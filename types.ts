@@ -1,4 +1,5 @@
 import type { BackgroundFrame } from './utils/backgroundFrame';
+import type { CameraBubble } from './utils/cameraBubble';
 
 import React from 'react';
 
@@ -12,6 +13,8 @@ export interface Clip {
   muted?: boolean;     // If true, audio is suppressed (used when audio is detached)
   /** #28: clips captured in one recording share this id; timing edits propagate across them. */
   recordingLinkID?: string;
+  /** #28: camera bubble for this screen clip (screen clips of a recording with a camera only). */
+  cameraBubble?: CameraBubble;
   crop?: {             // Global crop for this clip (0-100 percentages)
       x: number;
       y: number;
@@ -151,6 +154,8 @@ export interface EditorState {
   audio: MediaAsset | null; // Background Audio Asset
   /** #28: microphone narration recorded with the screen (A2). */
   narration?: MediaAsset | null;
+  /** #28: camera recorded with the screen. timeOffset = camera media 0 in screen-source seconds. */
+  camera?: MediaAsset | null;
 
   // Timeline State
   duration: number; // Total timeline duration
