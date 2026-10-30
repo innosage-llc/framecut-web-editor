@@ -535,4 +535,66 @@ test.describe('QA warnings', () => {
     expect(Math.abs(micSrc.stopOffset - screen.stopOffset)).toBeLessThan(0.5);
     await expect(page.getByTestId('recording-notice')).toHaveCount(0);
   });
+
+  test('a failed recorder start also stops the camera opened for that recording', async ({ page }) => {
+    await boot(page, () => {
+      const md = navigator.mediaDevices;
+      const gum = md.getUserMedia.bind(md);
+      (window as any).__camStreams = [];
+      md.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.video) (window as any).__camStreams.push(s); return s; };
+      const Orig = window.MediaRecorder;
+      let fail = true;
+      (window as any).MediaRecorder = class extends Orig {
+        start(t?: number) { if (fail) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
+      };
+    });
+    const cam = page.getByRole('combobox', { name: 'Camera' });
+    await cam.selectOption(await cam.locator('option').nth(1).getAttribute('value') as string);
+    await expect.poll(() => page.evaluate(() => (window as any).__camStreams.length)).toBe(1);
+    await page.getByRole('button', { name: 'Start Recording' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__alerts.length)).toBe(1);
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => {
+      const ss = ((window as any).__camStreams as MediaStream[]).slice(1); // opened by the recording
+      return { opened: ss.length, live: ss.flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length };
+    });
+    expect(r.opened).toBeGreaterThan(0);
+    expect(r.live).toBe(0);
+  });
+
+  test("a previous session's camera 'ended' does not cut the next recording's camera", async ({ page }) => {
+    await boot(page, () => {
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      (window as any).__camTracks = [];
+      navigator.mediaDevices.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.video) (window as any).__camTracks.push(s.getVideoTracks()[0]); return s; };
+    });
+    const cam = page.getByRole('combobox', { name: 'Camera' });
+    const pick = async () => { await cam.selectOption(await cam.locator('option').nth(1).getAttribute('value') as string); await expect(cam).not.toHaveValue(''); };
+    await pick();
+    const record = async (ms: number, during?: () => Promise<void>) => {
+      await page.getByRole('button', { name: 'Start Recording' }).click();
+      await expect(page.getByRole('button', { name: 'Stop Sharing' })).toBeVisible({ timeout: 10000 });
+      await page.waitForTimeout(ms / 2);
+      if (during) await during();
+      await page.waitForTimeout(ms / 2);
+      await page.getByRole('button', { name: 'Stop Sharing' }).click();
+      await expect(page.getByRole('button', { name: 'Stop Sharing' })).toHaveCount(0, { timeout: 15000 });
+    };
+    await record(1500);
+    await page.waitForFunction(() => (window as any).__FRAMECUT_LAST_CAPTURE__, null, { timeout: 15000 });
+    await page.evaluate(() => { const w = window as any; w.__firstCap = w.__FRAMECUT_LAST_CAPTURE__; w.__oldTracks = [...w.__camTracks]; });
+    await page.locator('[title="Remove"]').first().click();
+    await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 5000 });
+    if ((await cam.inputValue()) === '') await pick();
+    await record(3000, async () => {
+      await page.evaluate(() => { for (const t of (window as any).__oldTracks as MediaStreamTrack[]) t.dispatchEvent(new Event('ended')); });
+    });
+    await page.waitForFunction(() => (window as any).__FRAMECUT_LAST_CAPTURE__ !== (window as any).__firstCap, null, { timeout: 15000 });
+    const cap = await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__);
+    const screen = cap.sources.find((x: any) => x.id === 'screen');
+    const camSrc = cap.sources.find((x: any) => x.id === 'camera');
+    expect(camSrc).toBeTruthy();
+    expect(cap.cameraEndedEarly).toBe(false);
+    expect(Math.abs(camSrc.stopOffset - screen.stopOffset)).toBeLessThan(0.5);
+  });
 });
