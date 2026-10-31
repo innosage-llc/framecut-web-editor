@@ -4,14 +4,14 @@
 - **Name**: framecut-web-editor
 - **Org**: innosage-llc
 - **GitHub**: https://github.com/innosage-llc/framecut-web-editor
-- **Default Branch**: `master`
+- **Default Branch**: `main`
 
 ## Stack
 - React + TypeScript + Vite
 - Node.js (npm)
 
 ## Agent Config
-- **Base Branch**: `master`
+- **Base Branch**: `main`
 - **Gate Command**: `./scripts/gatekeeper.sh`
 - **Merge Strategy**: squash
 - **Trust Tier — High Paths**: `src/auth`, `infra`, `.github/workflows`

@@ -14,7 +14,7 @@ The Gate command for this repository is:
 1. **Identify**: Read the task/issue.
 2. **Execute**: Modify the code.
 3. **Verify (The Gate)**: Run `./scripts/gatekeeper.sh`. If it fails, fix and repeat until it passes.
-4. **Commit/Push**: Create a feature branch and submit a PR via `gh pr create --fill`.
+4. **Commit/Push**: Create a feature branch and submit a PR targeting `main`.
 5. **Auto Merge**:
    - Once a PR is open and the Gate is green, call `./scripts/auto-merge-ci.sh` to run the standardized merge flow. `agent-gate.sh` remains a legacy workflow.
    - **Condition**: There must be NO pending code review comments or change requests.
