@@ -2,6 +2,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { SpotlightEffect, RecordingEvent } from '../types';
 import { generateId, formatTimeShort } from '../utils';
+import { useCaptureSession } from './useCaptureSession';
+import { sessionToMediaTime } from '../utils/captureClock';
 
 interface UseScreenRecorderProps {
   onRecordingComplete: (blob: Blob, name: string, events: RecordingEvent[], durationHint?: number) => void;
@@ -20,8 +22,10 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
   const pipVideoRef = useRef<HTMLVideoElement>(null);
 
   // Internal Refs
-  const screenRecorderRef = useRef<MediaRecorder | null>(null);
-  const screenChunksRef = useRef<Blob[]>([]);
+  const captureSession = useCaptureSession();
+  const finishingRef = useRef(false);
+  /** Identifies the live session; stale `ended` handlers from an earlier stream are ignored. */
+  const sessionStreamRef = useRef<MediaStream | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
   const recordingMarkersRef = useRef<number[]>([]);
   const recordingIntervalRef = useRef<any>(null);
@@ -91,11 +95,46 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
     }
   }, [isPiPActive, recordingDuration, updatePiP]);
 
-  const handleStartScreenRecording = async () => {
+  const finishSession = useCallback(async () => {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
+    sessionStreamRef.current = null;
+    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      const recorder = new MediaRecorder(stream);
-      screenChunksRef.current = [];
+      const result = await captureSession.stop();
+      // Exit PiP if active
+      if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => { });
+      }
+      setIsPiPActive(false);
+      recordingStartTimeRef.current = 0;
+      setIsScreenRecording(false);
+      const screen = result?.sources.find(src => src.id === 'screen');
+      if (!result || !screen) return;
+
+      // Events were stamped on the session clock; re-base them onto the screen recording, measured
+      // from when its recorder was started (same reference the app used before #28).
+      const events = recordingEventsRef.current.map(ev => ({ ...ev, time: sessionToMediaTime(ev.time, screen.requestedOffset) }));
+      const durationHint = Math.max(0, screen.stopOffset - screen.requestedOffset);
+      if ((window as any).__FRAMECUT_E2E_ENABLED__) {
+        (window as any).__FRAMECUT_LAST_CAPTURE__ = {
+          sources: result.sources.map(src => ({ id: src.id, kind: src.kind, mimeType: src.mimeType, size: src.blob.size, requestedOffset: src.requestedOffset, startOffset: src.startOffset, stopOffset: src.stopOffset })),
+          durationHint,
+          eventCount: events.length,
+          completedCount: ((window as any).__FRAMECUT_LAST_CAPTURE__?.completedCount ?? 0) + 1,
+        };
+      }
+      const timestamp = new Date().toLocaleTimeString().replace(/:/g, '-');
+      onRecordingComplete(screen.blob, `Screen Recording ${timestamp}`, events, durationHint);
+    } finally {
+      finishingRef.current = false;
+    }
+  }, [captureSession, onRecordingComplete]);
+
+  const handleStartScreenRecording = async () => {
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       recordingMarkersRef.current = [];
       recordingEventsRef.current = []; // Reset events
       setRecordingMarkersCount(0);
@@ -110,35 +149,20 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
         setRecordingDuration(d => d + 1);
       }, 1000);
 
-      recordingStartTimeRef.current = Date.now();
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) screenChunksRef.current.push(e.data); };
-      
-      recorder.onstop = () => {
-        if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
-
-        // Exit PiP if active
-        if (document.pictureInPictureElement) {
-          document.exitPictureInPicture().catch(() => { });
-        }
-        setIsPiPActive(false);
-
-        const blob = new Blob(screenChunksRef.current, { type: 'video/webm' });
-        const timestamp = new Date().toLocaleTimeString().replace(/:/g, '-');
-        
-        // Pass duration hint (current timer value) to help with WebM infinity duration issues
-        onRecordingComplete(blob, `Screen Recording ${timestamp}`, recordingEventsRef.current, recordingDuration);
-        
-        setIsScreenRecording(false);
-        stream.getTracks().forEach(track => track.stop());
-      };
-      
-      stream.getVideoTracks()[0].onended = () => { if (recorder.state !== 'inactive') recorder.stop(); };
-
-      recorder.start();
-      screenRecorderRef.current = recorder;
+      // One session clock for every source (#28). Only the screen is recorded today.
+      // start() tears everything down itself and throws if a recorder can't start.
+      captureSession.start([{ id: 'screen', kind: 'video', stream }]);
+      const sessionStream = stream;
+      sessionStreamRef.current = sessionStream;
+      // Only the live session's stream may end it (a stale stream from a failed start must not).
+      stream.getVideoTracks()[0].onended = () => { if (sessionStreamRef.current === sessionStream) void finishSession(); };
+      recordingStartTimeRef.current = performance.now();
       setIsScreenRecording(true);
     } catch (err: any) {
       console.error("Screen recording cancelled or failed", err);
+      // Never leave a live screen share behind after a failed start.
+      stream?.getTracks().forEach(t => { t.onended = null; try { t.stop(); } catch { /* ignore */ } });
+      sessionStreamRef.current = null;
       setIsScreenRecording(false);
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
       
@@ -151,25 +175,21 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
   };
 
   const handleStopScreenRecording = () => {
-    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
-    if (screenRecorderRef.current && screenRecorderRef.current.state !== 'inactive') screenRecorderRef.current.stop();
-    if (document.pictureInPictureElement) {
-      document.exitPictureInPicture().catch(() => { });
-    }
+    void finishSession();
   };
 
   const handleMarker = useCallback(() => {
     if (!isScreenRecording) return;
-    const time = (Date.now() - recordingStartTimeRef.current) / 1000;
+    const time = captureSession.now();
     
     // Use last tracked mouse position instead of hardcoded 50/50
     const { x, y } = currentMousePosRef.current;
     
     // Manual marker
     recordingEventsRef.current.push({ x, y, time, type: 'click' }); 
-    recordingMarkersRef.current.push(Date.now() - recordingStartTimeRef.current);
+    recordingMarkersRef.current.push(time * 1000);
     setRecordingMarkersCount(prev => prev + 1);
-  }, [isScreenRecording]);
+  }, [isScreenRecording, captureSession]);
 
   // Capture Input Events (Mouse, Keyboard, Window)
   useEffect(() => {
@@ -193,7 +213,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
 
       const handleMouseMove = (e: MouseEvent) => {
           if (!recordingStartTimeRef.current) return;
-          const now = Date.now();
+          const now = performance.now();
           
           // Always update current position reference for Markers
           const { x, y } = getSafeCoordinates(e);
@@ -202,7 +222,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
           if (now - lastMouseSampleTime.current < 33) return; // 30 FPS cap
           lastMouseSampleTime.current = now;
 
-          const time = (now - recordingStartTimeRef.current) / 1000;
+          const time = captureSession.now();
 
           recordingEventsRef.current.push({
               x,
@@ -214,7 +234,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
 
       const handleMouseDown = (e: MouseEvent) => {
           if (!recordingStartTimeRef.current) return;
-          const time = (Date.now() - recordingStartTimeRef.current) / 1000;
+          const time = captureSession.now();
           
           const { x, y } = getSafeCoordinates(e);
           currentMousePosRef.current = { x, y };
@@ -234,7 +254,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
 
       const handleKeyDown = (e: KeyboardEvent) => {
           if (!recordingStartTimeRef.current) return;
-          const time = (Date.now() - recordingStartTimeRef.current) / 1000;
+          const time = captureSession.now();
           
           setCapturedEventsCount(prev => prev + 1); 
 
@@ -247,13 +267,13 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
 
       const handleBlur = () => {
           if (!recordingStartTimeRef.current) return;
-          const time = (Date.now() - recordingStartTimeRef.current) / 1000;
+          const time = captureSession.now();
           recordingEventsRef.current.push({ type: 'window_blur', time });
       };
 
       const handleFocus = () => {
           if (!recordingStartTimeRef.current) return;
-          const time = (Date.now() - recordingStartTimeRef.current) / 1000;
+          const time = captureSession.now();
           recordingEventsRef.current.push({ type: 'window_focus', time });
       };
 
@@ -270,7 +290,7 @@ export const useScreenRecorder = ({ onRecordingComplete }: UseScreenRecorderProp
           window.removeEventListener('blur', handleBlur);
           window.removeEventListener('focus', handleFocus);
       };
-  }, [isScreenRecording]);
+  }, [isScreenRecording, captureSession]);
 
   // Update PiP Canvas if active
   useEffect(() => {
