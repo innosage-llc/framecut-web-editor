@@ -443,11 +443,14 @@ test.describe('QA warnings', () => {
       const gum = md.getUserMedia.bind(md);
       (window as any).__micStreams = [];
       md.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.audio) (window as any).__micStreams.push(s); return s; };
+      const screens = new WeakSet<MediaStream>();
+      const gdm = md.getDisplayMedia.bind(md);
+      md.getDisplayMedia = async c => { const stream = await gdm(c); screens.add(stream); return stream; };
       const Orig = window.MediaRecorder;
       let fail = true;
       (window as any).MediaRecorder = class extends Orig {
         // Fail the screen recorder (the mic path also runs a throwaway encoder warm-up recorder).
-        start(t?: number) { if (fail && this.stream.getVideoTracks().length) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
+        start(t?: number) { if (fail && screens.has(this.stream)) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
       };
       const AC = window.AudioContext;
       (window as any).__contexts = [];

@@ -74,15 +74,18 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
   source.connect(dest);
   let flowed = false;
   let cold = false;
+  let released = false;
   const ready = (async () => {
     try { await ctx.resume?.(); } catch { /* ignore */ }
+    if (released) return;
     // Wait until mono samples actually flow out of the graph, so the narration recorder's media
     // time 0 is when start() is called (a cold device/context can otherwise begin hundreds of ms
     // late). Uses the track's delivered-frame counter where supported, else the context clock.
     const out = dest.stream.getAudioTracks()[0] as MediaStreamTrack & { stats?: { deliveredFrames?: number } };
     const flowing = () => (out?.stats && typeof out.stats.deliveredFrames === 'number' ? out.stats.deliveredFrames > 0 : ctx.currentTime > 0);
     const t = performance.now();
-    while (!flowing() && performance.now() - t < 3000) await new Promise(r => setTimeout(r, 5));
+    while (!released && !flowing() && performance.now() - t < 3000) await new Promise(r => setTimeout(r, 5));
+    if (released) return;
     flowed = flowing();
     // The first audio MediaRecorder in a page can take over a second to initialise its encoder and
     // drops the samples captured meanwhile, so narration would start late. Warm it up once here.
@@ -102,6 +105,7 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
     coldStart: () => cold,
     release: () => {
       void keep;
+      released = true;
       stopWarmupOf(dest.stream);
       try { source.disconnect(); } catch { /* ignore */ }
       ctx.close().catch(() => {});
@@ -109,6 +113,7 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
     },
     close: () => {
       void keep;
+      released = true;
       stopWarmupOf(dest.stream);
       dest.stream.getTracks().forEach(t => t.stop());
       try { source.disconnect(); } catch { /* ignore */ }
