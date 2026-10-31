@@ -68,6 +68,7 @@ export interface CaptureSessionDeps {
 export interface CaptureSessionController {
   start: (specs: CaptureSourceSpec[]) => CaptureClock;
   stop: () => Promise<CaptureSessionResult | null>;
+  stopSource: (id: string) => void;
   now: () => number;
   startOffsetOf: (id: string) => number | null;
   isActive: () => boolean;
@@ -168,9 +169,22 @@ export const createCaptureSession = (deps: CaptureSessionDeps = {}): CaptureSess
     }
   };
 
+  /**
+   * Stop one source (e.g. a disconnected microphone) while the others keep recording.
+   * Its data so far is kept and returned with the rest by stop().
+   */
+  const stopSource = (id: string) => {
+    const entry = activeRef.find(a => a.spec.id === id);
+    if (!entry) return;
+    if (entry.recorder.state !== 'inactive') { try { entry.recorder.stop(); } catch { entry.finish(); } }
+    else entry.finish();
+    entry.spec.stream.getTracks().forEach(t => { try { t.stop(); } catch { /* ignore */ } });
+  };
+
   return {
     start,
     stop,
+    stopSource,
     /** Session seconds since start (0 when idle). */
     now: () => clockRef?.now() ?? 0,
     /** Start offset of a source once its recorder has fired `start` (null before that). */

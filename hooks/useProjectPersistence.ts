@@ -100,6 +100,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
             mainVideo: stripWaveform(persistentState.mainVideo),
             outro: stripWaveform(persistentState.outro),
             audio: stripWaveform(persistentState.audio),
+            narration: stripWaveform(persistentState.narration ?? null),
             currentTime: 0, 
             zoomLevel: persistentState.zoomLevel || 50
         };
@@ -189,7 +190,8 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                             console.warn(`Failed to restore asset ${asset.name} from DB`, e);
                         }
                     }
-                    return asset; 
+                    // A saved blob: URL belonged to the previous page and can't load any more.
+                    return asset.src?.startsWith('blob:') ? { ...asset, src: '' } : asset;
                 };
 
                 // 并行恢复所有资源的 Blob URL
@@ -197,6 +199,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                 const restoredMain = await restoreAsset(parsed.mainVideo);
                 const restoredOutro = await restoreAsset(parsed.outro);
                 const restoredAudio = await restoreAsset(parsed.audio);
+                const restoredNarration = await restoreAsset(parsed.narration ?? null);
 
                 if (isResettingRef.current) return;
 
@@ -207,6 +210,9 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                     mainVideo: restoredMain,
                     outro: restoredOutro,
                     audio: restoredAudio,
+                    narration: restoredNarration,
+                    narrationClips: parsed.narrationClips ?? [],
+                    mutedAudioRoles: parsed.mutedAudioRoles ?? (parsed.isAudioTrackMuted ? ['music'] : []),
                     isPlaying: false,
                     isExporting: false,
                     selection: null
@@ -296,6 +302,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
             stateToSave.mainVideo = await processAsset(stateToSave.mainVideo);
             stateToSave.outro = await processAsset(stateToSave.outro);
             stateToSave.audio = await processAsset(stateToSave.audio);
+            stateToSave.narration = await processAsset(stateToSave.narration ?? null);
 
             zip.file("project.json", JSON.stringify(stateToSave, null, 2));
 
@@ -361,6 +368,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                     projectState.mainVideo = await restoreAssetFromZip(projectState.mainVideo);
                     projectState.outro = await restoreAssetFromZip(projectState.outro);
                     projectState.audio = await restoreAssetFromZip(projectState.audio);
+                    projectState.narration = await restoreAssetFromZip(projectState.narration ?? null);
 
                 } else {
                     const text = await file.text();
@@ -382,6 +390,9 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                     ...prev,
                     ...projectState,
                     backgroundFrame: normalizeBackgroundFrame(projectState.backgroundFrame),
+                    narration: projectState.narration ?? null,
+                    narrationClips: projectState.narrationClips ?? [],
+                    mutedAudioRoles: projectState.mutedAudioRoles ?? (projectState.isAudioTrackMuted ? ['music'] : []),
                     duration,
                     isPlaying: false,
                     isExporting: false,

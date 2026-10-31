@@ -23,6 +23,9 @@ interface TracksLayerProps {
     outro: MediaAsset | null;
     mainVideo: MediaAsset | null;
     audio: MediaAsset | null;
+    narration?: MediaAsset | null;
+    narrationClips?: Clip[];
+    onToggleNarrationClipMute?: (id: string) => void;
     onSelect: (selection: Selection) => void;
     onSeek: (time: number) => void;
     onInteractionStart?: () => void;
@@ -33,7 +36,7 @@ interface TracksLayerProps {
 const TracksLayer: React.FC<TracksLayerProps> = memo(({ 
     isEmpty, totalWidth, ticks, zoomLevel, 
     clips, audioClips, subtitleTracks, zoomEffects, spotlightTracks, mosaicTracks, 
-    selection, intro, outro, mainVideo, audio,
+    selection, intro, outro, mainVideo, audio, narration = null, narrationClips = [], onToggleNarrationClipMute,
     onSelect, onSeek, onInteractionStart, 
     setDragState, handleSeek
 }) => {
@@ -63,6 +66,17 @@ const TracksLayer: React.FC<TracksLayerProps> = memo(({
                 onSelect={onSelect} onInteractionStart={onInteractionStart}
                 handleSeek={handleSeek} setDragState={setDragState} onSeek={onSeek}
             />
+
+            {/* #28: A2 Narration (only when the project has narration) */}
+            {narrationClips.length > 0 && (
+                <ClipTrack
+                    clips={narrationClips} type="narration" zoomLevel={zoomLevel} selection={selection}
+                    intro={null} outro={null} mainVideo={null} audio={null} narration={narration}
+                    onToggleClipMute={onToggleNarrationClipMute}
+                    onSelect={onSelect} onInteractionStart={onInteractionStart}
+                    handleSeek={handleSeek} setDragState={setDragState} onSeek={onSeek}
+                />
+            )}
 
             {/* Track 2: Audio */}
             <ClipTrack 

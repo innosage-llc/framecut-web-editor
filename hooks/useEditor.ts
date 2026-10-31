@@ -1,15 +1,36 @@
+import type React from 'react';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { DEFAULT_BACKGROUND_FRAME, normalizeBackgroundFrame } from '../utils/backgroundFrame';
 import { ExtendedEditorState, Clip, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect } from '../types';
 import { generateId } from '../utils';
 import { useHistory } from './useHistory';
-import { useClipOperations } from './useClipOperations';
+import { linkedCompanions } from '../utils/linkedRecordingClips';
+import type { AudioRole } from '../types';
+import { useClipOperations, resolveLinkedSelection } from './useClipOperations';
 
-type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'duration' | 'clips' | 'audioClips' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
+type ProjectState = Pick<ExtendedEditorState, 'intro' | 'mainVideo' | 'outro' | 'audio' | 'narration' | 'duration' | 'clips' | 'audioClips' | 'narrationClips' | 'mutedAudioRoles' | 'subtitles' | 'zoomEffects' | 'spotlightEffects' | 'mosaicEffects' | 'selection' | 'fileName' | 'isAudioTrackMuted' | 'coverImage' | 'recordingEvents' | 'canvasBackgroundColor' | 'backgroundFrame' | 'aspectRatio' | 'autoZoomEnabled' | 'autoZoomSensitivity' | 'clickRipplesEnabled'>;
 
 // 定义存储键名 (必须与 useProjectPersistence 保持一致)
 const STORAGE_KEY = 'framecut-project-v1';
+
+/** Media asset keys whose saved `src` is a blob URL from the previous page (restored from IndexedDB later). */
+export const PERSISTED_ASSET_KEYS = ['intro', 'mainVideo', 'outro', 'audio', 'narration'] as const;
+
+/**
+ * A saved project's blob: URLs died with the page that created them. Clear them from the initial
+ * state so no element requests them (ERR_FILE_NOT_FOUND); useProjectPersistence then restores the
+ * media from IndexedDB with fresh URLs.
+ */
+export const withoutStaleBlobUrls = (parsed: any) => {
+    if (!parsed || typeof parsed !== 'object') return parsed;
+    const out = { ...parsed };
+    for (const key of PERSISTED_ASSET_KEYS) {
+        const a = out[key];
+        if (a && typeof a.src === 'string' && a.src.startsWith('blob:')) out[key] = { ...a, src: '' };
+    }
+    return out;
+};
 const PENDING_RESET_KEY = 'PENDING_RESET';
 
 // 提取默认状态，方便复用和重置
@@ -18,6 +39,7 @@ const defaultState: ExtendedEditorState = {
     mainVideo: null,
     outro: null,
     audio: null,
+    narration: null,
     duration: 0,
     currentTime: 0,
     isPlaying: false,
@@ -30,6 +52,8 @@ const defaultState: ExtendedEditorState = {
     backgroundFrame: DEFAULT_BACKGROUND_FRAME,
     clips: [],
     audioClips: [],
+    narrationClips: [],
+    mutedAudioRoles: [],
     subtitles: [],
     zoomEffects: [],
     spotlightEffects: [],
@@ -52,7 +76,7 @@ const defaultState: ExtendedEditorState = {
 
 export const useEditor = () => {
     // 【核心修复】使用初始化函数来加载状态
-    const [state, setState] = useState<ExtendedEditorState>(() => {
+    const [state, setRawState] = useState<ExtendedEditorState>(() => {
         // 1. 安全检查：如果正在等待重置，强制返回空状态
         if (localStorage.getItem(PENDING_RESET_KEY) === 'true') {
             console.log("useEditor: 检测到重置标记，跳过本地缓存加载");
@@ -63,7 +87,7 @@ export const useEditor = () => {
         try {
             const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
-                const parsed = JSON.parse(saved);
+                const parsed = withoutStaleBlobUrls(JSON.parse(saved));
                 return { 
                     ...defaultState, 
                     ...parsed,
@@ -79,6 +103,20 @@ export const useEditor = () => {
         // 3. 如果没有缓存，返回默认状态
         return defaultState;
     });
+
+    // #28: every edit that changes the screen clips (trim, split, move, delete, speed, ripple,
+    // Magic Edit…) also re-times linked narration clips. Updates that replace narrationClips
+    // themselves (undo/redo, project load, import) are left as they are.
+    const setState = useCallback<React.Dispatch<React.SetStateAction<ExtendedEditorState>>>((action) => {
+        setRawState(prev => {
+            const next = typeof action === 'function' ? (action as (p: ExtendedEditorState) => ExtendedEditorState)(prev) : action;
+            if (next === prev || next.clips === prev.clips) return next;
+            const narration = prev.narrationClips ?? [];
+            if (narration.length === 0 || next.narrationClips !== prev.narrationClips) return next;
+            const updated = linkedCompanions(prev.clips, next.clips, narration);
+            return updated === narration ? next : { ...next, narrationClips: updated };
+        });
+    }, []);
 
     const stateRef = useRef(state);
     useEffect(() => { stateRef.current = state; }, [state]);
@@ -127,9 +165,12 @@ export const useEditor = () => {
         mainVideo: fullState.mainVideo,
         outro: fullState.outro,
         audio: fullState.audio,
+        narration: fullState.narration ?? null,
         duration: fullState.duration,
         clips: fullState.clips,
         audioClips: fullState.audioClips,
+        narrationClips: fullState.narrationClips ?? [],
+        mutedAudioRoles: fullState.mutedAudioRoles ?? [],
         subtitles: fullState.subtitles,
         zoomEffects: fullState.zoomEffects,
         spotlightEffects: fullState.spotlightEffects,
@@ -174,6 +215,7 @@ export const useEditor = () => {
         handleDelete,
         handleSplit,
         handleCrop,
+        handleToggleNarrationClipMute,
         handleUpdateClip,
         handleUpdateSubtitle,
         handleUpdateZoomEffect,
@@ -274,7 +316,7 @@ export const useEditor = () => {
             const clipId = prev.selection.id;
             const videoClip = prev.clips.find(c => c.id === clipId);
             if (!videoClip) return prev;
-            const newAudioClip: Clip = { ...videoClip, id: generateId(), muted: false };
+            const newAudioClip: Clip = { ...videoClip, id: generateId(), muted: false, recordingLinkID: undefined }; // #28: detached system audio is independent of the recording link
             const updatedVideoClips = prev.clips.map(c => c.id === clipId ? { ...c, muted: true } : c);
             const updatedAudioClips = [...prev.audioClips, newAudioClip];
             return { ...prev, clips: updatedVideoClips, audioClips: updatedAudioClips, selection: { type: 'audio', id: newAudioClip.id }, duration: recalculateDuration(updatedVideoClips, updatedAudioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects) };
@@ -310,15 +352,23 @@ export const useEditor = () => {
     }, []);
 
     const handleClipSpeedChange = useCallback((speed: number) => {
+        // #28: a narration selection changes the speed of its linked screen clip (the narration
+        // follows via recordingLinkID). Nothing to change → no undo step.
+        const cur = resolveLinkedSelection(stateRef.current);
+        const sel = cur.selection;
+        if (!sel || (sel.type !== 'clip' && sel.type !== 'audio')) return;
+        const target = (sel.type === 'audio' ? cur.audioClips : cur.clips).find(c => c.id === sel.id);
+        if (!target || target.speed === speed) return;
         pushHistory();
-        setState(prev => {
+        setState(original => {
+            const prev = resolveLinkedSelection(original);
             const { selection, clips, audioClips } = prev;
-            if (!selection) return prev;
+            if (!selection || (selection.type !== 'clip' && selection.type !== 'audio')) return original;
             const isAudio = selection.type === 'audio';
             const targetClips = isAudio ? audioClips : clips;
             const targetId = selection.id;
             const clipIndex = targetClips.findIndex(c => c.id === targetId);
-            if (clipIndex === -1) return prev;
+            if (clipIndex === -1) return original;
             const clip = targetClips[clipIndex];
             const oldDuration = (clip.sourceEnd - clip.sourceStart) / clip.speed;
             const newDuration = (clip.sourceEnd - clip.sourceStart) / speed;
@@ -334,7 +384,7 @@ export const useEditor = () => {
             const newClips = isAudio ? clips : newTrackClips;
             const newAudioClips = isAudio ? newTrackClips : audioClips;
             return {
-                ...prev,
+                ...original,
                 clips: newClips,
                 audioClips: newAudioClips,
                 duration: recalculateDuration(newClips, newAudioClips, prev.subtitles, prev.zoomEffects, prev.spotlightEffects, prev.mosaicEffects)
@@ -354,9 +404,21 @@ export const useEditor = () => {
         setState(prev => ({ ...prev, ...updates }));
     }, []);
 
+    /** #28: A1/A2/A3 lane mute; persisted and one undo step. Music mirrors the legacy audio-track mute. */
+    const handleSetAudioRoleMuted = useCallback((role: AudioRole, muted: boolean) => {
+        pushHistory();
+        setState(prev => {
+            const roles = new Set<AudioRole>(prev.mutedAudioRoles ?? []);
+            if (role === 'music' && prev.isAudioTrackMuted) roles.add('music');
+            if (muted) roles.add(role); else roles.delete(role);
+            return { ...prev, mutedAudioRoles: (['system', 'narration', 'music'] as AudioRole[]).filter(r => roles.has(r)), isAudioTrackMuted: roles.has('music') };
+        });
+    }, [pushHistory, setState]);
+
     return {
         state,
         setState,
+        handleSetAudioRoleMuted,
         stateRef,
         pushHistory,
         handleUndo,
@@ -365,6 +427,7 @@ export const useEditor = () => {
         handleDelete,
         handleSplit,
         handleCrop,
+        handleToggleNarrationClipMute,
         handleUpdateClip,
         handleUpdateSubtitle,
         handleUpdateZoomEffect,

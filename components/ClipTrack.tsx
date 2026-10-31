@@ -1,11 +1,13 @@
 
 import React, { memo } from 'react';
 import { Clip, MediaAsset, Selection } from '../types';
-import { Video, MonitorPlay, Film, Gauge, Volume2, Music } from 'lucide-react';
+import { Video, MonitorPlay, Film, Gauge, Volume2, VolumeX, Music, Mic, Link2 } from 'lucide-react';
 
 interface ClipTrackProps {
     clips: Clip[];
-    type: 'video' | 'audio';
+    type: 'video' | 'audio' | 'narration';
+    narration?: MediaAsset | null;
+    onToggleClipMute?: (id: string) => void;
     zoomLevel: number;
     selection: Selection;
     intro: MediaAsset | null;
@@ -20,7 +22,7 @@ interface ClipTrackProps {
 }
 
 const ClipTrack: React.FC<ClipTrackProps> = memo(({
-    clips, type, zoomLevel, selection, intro, outro, mainVideo, audio,
+    clips, type, zoomLevel, selection, intro, outro, mainVideo, audio, narration = null, onToggleClipMute,
     onSelect, onInteractionStart, handleSeek, setDragState, onSeek
 }) => {
 
@@ -29,13 +31,16 @@ const ClipTrack: React.FC<ClipTrackProps> = memo(({
         if(clip.mediaType === 'intro') asset = intro;
         else if(clip.mediaType === 'outro') asset = outro;
         else if(clip.mediaType === 'audio') asset = audio;
+        else if(clip.mediaType === 'narration') asset = narration;
         else asset = mainVideo;
 
         if (!asset || !asset.waveformData) return null;
         
         const samplesPerSec = 50; 
-        const startIdx = Math.floor(clip.sourceStart * samplesPerSec);
-        const endIdx = Math.floor(clip.sourceEnd * samplesPerSec);
+        // Narration clips use screen-source time; the waveform is in narration media time.
+        const shift = clip.mediaType === 'narration' ? (asset.timeOffset ?? 0) : 0;
+        const startIdx = Math.max(0, Math.floor((clip.sourceStart - shift) * samplesPerSec));
+        const endIdx = Math.floor((clip.sourceEnd - shift) * samplesPerSec);
         const count = endIdx - startIdx;
         const totalAssetSamples = asset.waveformData.length;
         
@@ -59,13 +64,14 @@ const ClipTrack: React.FC<ClipTrackProps> = memo(({
     };
 
     return (
-        <div className="h-10 relative w-full group/track">
+        <div className="h-10 relative w-full group/track" data-testid={type === 'narration' ? 'narration-track' : undefined}>
             <div className="absolute inset-0 bg-zinc-800/30 border-y border-zinc-800/50"></div>
             {clips.map((clip: Clip) => {
                 const visualDuration = (clip.sourceEnd - clip.sourceStart) / clip.speed;
                 const width = visualDuration * zoomLevel;
                 const left = clip.offset * zoomLevel;
-                const isSelected = selection?.type === (type === 'video' ? 'clip' : 'audio') && selection.id === clip.id;
+                const selectionType = type === 'video' ? 'clip' : type;
+                const isSelected = selection?.type === selectionType && selection.id === clip.id;
                 
                 // Theme Logic - Brightened unselected states significantly (600/40 opacity for glass effect)
                 let bgColor, borderColor, hoverBorder, selectedBg, textColor, label, Icon;
@@ -97,6 +103,14 @@ const ClipTrack: React.FC<ClipTrackProps> = memo(({
                         label = 'Outro'; 
                         Icon = Film;
                     }
+                } else if (type === 'narration') {
+                    bgColor = 'bg-teal-600/40 hover:bg-teal-600/50';
+                    borderColor = 'border-teal-500/50';
+                    hoverBorder = 'hover:border-teal-400';
+                    selectedBg = 'bg-teal-600 shadow-[0_0_15px_rgba(13,148,136,0.4)]';
+                    textColor = 'text-teal-50/90';
+                    label = 'Narration';
+                    Icon = Mic;
                 } else {
                     // Audio Track Defaults
                     bgColor = 'bg-orange-600/40 hover:bg-orange-600/50'; 
@@ -126,7 +140,9 @@ const ClipTrack: React.FC<ClipTrackProps> = memo(({
                         onMouseDown={(e) => {
                             e.stopPropagation();
                             if (onInteractionStart) onInteractionStart();
-                            onSelect({ type: type === 'video' ? 'clip' : 'audio', id: clip.id });
+                            onSelect({ type: selectionType, id: clip.id } as Selection);
+                            // Linked narration is edited through its screen clip (trim/move/split/delete propagate).
+                            if (type === 'narration') return;
                             setDragState({ type: 'move', itemType: type === 'video' ? 'clip' : 'audio', itemId: clip.id, startX: e.clientX, initialItem: clip });
                         }}
                     >
@@ -135,7 +151,21 @@ const ClipTrack: React.FC<ClipTrackProps> = memo(({
                             {clip.speed !== 1 && <span className="text-[9px] text-yellow-300 bg-black/40 px-1 rounded flex items-center gap-0.5 mt-0.5"><Gauge size={8} /> {clip.speed}x</span>}
                         </div>
                         {(!clip.muted || type === 'audio') && renderWaveform(clip)}
-                        {isSelected && (
+                        {type === 'narration' && (
+                            <div className="absolute right-1 top-1 z-30 flex items-center gap-1">
+                                {clip.recordingLinkID && <Link2 size={10} className="text-teal-100/80" aria-label="Linked to recording" />}
+                                <button
+                                    type="button"
+                                    title={clip.muted ? 'Unmute narration clip' : 'Mute narration clip'}
+                                    className="p-0.5 rounded bg-black/40 hover:bg-black/60"
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onClick={(e) => { e.stopPropagation(); onToggleClipMute?.(clip.id); }}
+                                >
+                                    {clip.muted ? <VolumeX size={10} className="text-red-400" /> : <Volume2 size={10} className="text-teal-100" />}
+                                </button>
+                            </div>
+                        )}
+                        {isSelected && type !== 'narration' && (
                             <>
                                 <div className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center hover:bg-yellow-400/20 rounded-l-md z-20" onMouseDown={(e) => { e.stopPropagation(); if (onInteractionStart) onInteractionStart(); setDragState({ type: 'trim-left', itemType: type === 'video' ? 'clip' : 'audio', itemId: clip.id, startX: e.clientX, initialItem: clip }); }} />
                                 <div className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center hover:bg-yellow-400/20 rounded-r-md z-20" onMouseDown={(e) => { e.stopPropagation(); if (onInteractionStart) onInteractionStart(); setDragState({ type: 'trim-right', itemType: type === 'video' ? 'clip' : 'audio', itemId: clip.id, startX: e.clientX, initialItem: clip }); }} />
