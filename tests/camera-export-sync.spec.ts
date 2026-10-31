@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type TestInfo } from '@playwright/test';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFileSync } from 'child_process';
@@ -16,7 +16,7 @@ const W = 640, H = 360, FPS = 30;
 const SCREEN_BITS = Array.from({ length: 9 }, (_, b) => [36.25 + (40 + 44 * b) * 0.8875, 20.25 + 40 * 0.8875]);
 const CAMERA_BITS = Array.from({ length: 9 }, (_, b) => { const r = Math.floor(b / 3), c = b % 3; return [460.8 + (120 + c * 40 - 40) * 0.45, 234 + (80 + r * 40) * 0.45]; });
 
-test.beforeEach(async ({ page }) => { await page.addInitScript(noAacShim); });
+test.beforeEach(async ({ page }, testInfo) => { await page.addInitScript(noAacShim); });
 
 async function project(page: any) {
   await boot(page);
@@ -32,7 +32,7 @@ const readBits = (frame: Buffer, pts: number[][]) => pts.reduce((acc, [x, y], b)
   return acc | (lum > 128 ? 1 << b : 0);
 }, 0);
 
-async function checkMp4(page: any, variant: { noWebCodecs?: boolean; noCamera?: boolean }) {
+async function checkMp4(page: any, testInfo: TestInfo, variant: { noWebCodecs?: boolean; noCamera?: boolean }) {
   if (variant.noWebCodecs) await page.addInitScript(() => { delete (window as any).VideoDecoder; });
   const clips = await project(page);
   if (variant.noCamera) {
@@ -41,7 +41,7 @@ async function checkMp4(page: any, variant: { noWebCodecs?: boolean; noCamera?: 
   }
   const tag = (variant.noWebCodecs ? 'noWC' : 'wc') + (variant.noCamera ? '-nocam' : '');
   const { path, seconds } = await exportMp4(page);
-  fs.copyFileSync(path, `/workspace/pr28-logs/prc-sync-export-${tag}.mp4`);
+  fs.copyFileSync(path, testInfo.outputPath(`prc-sync-export-${tag}.mp4`));
   const [w, h] = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', path]).toString().trim().split(',').map(Number);
   expect([w, h]).toEqual([W, H]);
   const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 30 });
@@ -60,7 +60,7 @@ async function checkMp4(page: any, variant: { noWebCodecs?: boolean; noCamera?: 
   // The screen frame is the one the edited timeline asks for (±1 frame), not wherever playback got to.
   const expectedScreen = (t: number) => { const c = sorted.find((c: any) => t >= c.offset && t < c.offset + (c.sourceEnd - c.sourceStart) / c.speed); return c ? Math.round((c.sourceStart + (t - c.offset) * c.speed) * FPS) : null; };
   const max = Math.max(...rows.map(r => r.offsetFrames));
-  fs.writeFileSync(`/workspace/pr28-logs/prc-sync-offsets-${tag}.json`, JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max, rows }, null, 1));
+  fs.writeFileSync(testInfo.outputPath(`prc-sync-offsets-${tag}.json`), JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max, rows }, null, 1));
   const maxScreenErr = Math.max(...rows.map(r => { const e = expectedScreen(r.i / FPS); return e === null ? 0 : Math.abs(r.screen - e); }));
   console.log('MP4_SYNC', tag, JSON.stringify({ exportSeconds: seconds, frames: rows.length, maxOffsetFrames: max, maxScreenErrFrames: maxScreenErr }));
   expect(rows.length).toBeGreaterThan(200);
@@ -70,22 +70,22 @@ async function checkMp4(page: any, variant: { noWebCodecs?: boolean; noCamera?: 
   if (!variant.noCamera) for (const r of rows) expect(r.offsetFrames, `frame ${r.i}: screen ${r.screen} camera ${r.camera}`).toBeLessThanOrEqual(1);
 }
 
-test('MP4: camera within one frame of the screen for every frame, after split, speed and trim', async ({ page }) => {
+test('MP4: camera within one frame of the screen for every frame, after split, speed and trim', async ({ page }, testInfo) => {
   test.setTimeout(300_000);
-  await checkMp4(page, {});
+  await checkMp4(page, testInfo, {});
 });
 
-test('MP4 without WebCodecs (fallback): screen and camera both frame-exact (QA #49 B1)', async ({ page }) => {
+test('MP4 without WebCodecs (fallback): screen and camera both frame-exact (QA #49 B1)', async ({ page }, testInfo) => {
   test.setTimeout(300_000);
-  await checkMp4(page, { noWebCodecs: true });
+  await checkMp4(page, testInfo, { noWebCodecs: true });
 });
 
-test('MP4 without a camera bubble: screen frame-exact at split/speed/trim points (QA #49 W3)', async ({ page }) => {
+test('MP4 without a camera bubble: screen frame-exact at split/speed/trim points (QA #49 W3)', async ({ page }, testInfo) => {
   test.setTimeout(300_000);
-  await checkMp4(page, { noCamera: true });
+  await checkMp4(page, testInfo, { noCamera: true });
 });
 
-test('GIF is pixel-identical to the 9e9f0b2 baseline (same project)', async ({ page }) => {
+test('GIF is pixel-identical to the 9e9f0b2 baseline (same project)', async ({ page }, testInfo) => {
   test.setTimeout(300_000);
   await project(page);
   const { path, seconds } = await exportGif(page);
@@ -94,9 +94,9 @@ test('GIF is pixel-identical to the 9e9f0b2 baseline (same project)', async ({ p
   const result = { exportSeconds: seconds, count: gif.count, w: gif.w, h: gif.h, hashes };
   if (process.env.CAPTURE_GIF_BASELINE) {
     fs.writeFileSync(BASELINE, JSON.stringify({ commit: '9e9f0b2', count: gif.count, w: gif.w, h: gif.h, hashes }, null, 1) + '\n');
-    fs.copyFileSync(path, '/workspace/pr28-logs/prc-gif-baseline-9e9f0b2.gif');
+    fs.copyFileSync(path, testInfo.outputPath('prc-gif-baseline-9e9f0b2.gif'));
   }
-  fs.writeFileSync('/workspace/pr28-logs/prc-gif-current.json', JSON.stringify(result, null, 1));
+  fs.writeFileSync(testInfo.outputPath('prc-gif-current.json'), JSON.stringify(result, null, 1));
   const base = JSON.parse(fs.readFileSync(BASELINE, 'utf8'));
   expect([gif.count, gif.w, gif.h]).toEqual([base.count, base.w, base.h]);
   const diff = hashes.map((h, i) => (h === base.hashes[i] ? -1 : i)).filter(i => i >= 0);

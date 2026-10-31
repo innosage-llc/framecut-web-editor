@@ -194,7 +194,7 @@ test.describe('camera bubble in the editor', () => {
 });
 
 test.describe('camera recording (fake device)', () => {
-  test('setup: camera Off by default, permission only when picked, live preview; recording yields a camera asset', async ({ page, context, browserName }) => {
+  test('setup: camera Off by default, permission only when picked, live preview; recording yields a camera asset', async ({ page, context, browserName }, testInfo) => {
     test.skip(browserName !== 'chromium', 'fake camera is Chromium-only');
     await context.grantPermissions(['camera', 'microphone']);
     await page.addInitScript(() => {
@@ -229,7 +229,7 @@ test.describe('camera recording (fake device)', () => {
     await page.getByRole('button', { name: 'Stop Sharing' }).click();
     await page.waitForFunction(() => !!(window as any).__FRAMECUT_E2E__?.getSnapshot().camera, null, { timeout: 20_000 });
     const cap = await page.evaluate(() => (window as any).__FRAMECUT_LAST_CAPTURE__);
-    fs.writeFileSync('/workspace/pr28-logs/prc-fake-capture.json', JSON.stringify(cap, null, 2));
+    fs.writeFileSync(testInfo.outputPath('prc-fake-capture.json'), JSON.stringify(cap, null, 2));
     expect(cap.sources.map((x: any) => x.id).sort()).toEqual(['camera', 'screen']);
     expect(cap.cameraSettings.width).toBeGreaterThan(0);
     const s = await E2E(page);

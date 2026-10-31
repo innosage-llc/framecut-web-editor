@@ -18,11 +18,11 @@ const noAacShim = () => {
   };
 };
 
-test.beforeEach(async ({ page }) => { await page.addInitScript(noAacShim); });
+test.beforeEach(async ({ page }, testInfo) => { await page.addInitScript(noAacShim); });
 
 test.describe('camera bubble in exports', () => {
 
-  test('MP4 and GIF exports contain the bubble (decoded frames)', async ({ page }) => {
+  test('MP4 and GIF exports contain the bubble (decoded frames)', async ({ page }, testInfo) => {
     test.setTimeout(240_000);
     await boot(page);
     await loadWithCamera(page, 0.5);
@@ -36,7 +36,7 @@ test.describe('camera bubble in exports', () => {
     const dl = page.waitForEvent('download', { timeout: 200_000 });
     if (await settings.isVisible().catch(() => false)) await settings.click();
     const mp4 = (await (await dl).path())!;
-    fs.copyFileSync(mp4, '/workspace/pr28-logs/prc-export.mp4');
+    fs.copyFileSync(mp4, testInfo.outputPath('prc-export.mp4'));
     const probe = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', mp4]).toString().trim().split(',').map(Number);
     const [W, H] = probe;
     const px = (t: number) => {
@@ -80,7 +80,7 @@ test.describe('camera bubble in exports', () => {
     expect(near(frames[80], YELLOW, 60)).toBe(false);
   });
 
-  test('export slowdown from per-frame camera seeks (MP4 + GIF, 10 s project)', async ({ page }) => {
+  test('export slowdown from per-frame camera seeks (MP4 + GIF, 10 s project)', async ({ page }, testInfo) => {
     test.setTimeout(600_000);
     const timeExport = async (withCamera: boolean) => {
       await boot(page);
@@ -119,6 +119,6 @@ test.describe('camera bubble in exports', () => {
     const report = { project: '10 s, 640x360 screen + 320x240 camera (camera covers 0-6 s)', base, camera: cam,
       mp4Slowdown: +(cam.mp4 / base.mp4).toFixed(2), gifSlowdown: +(cam.gif / base.gif).toFixed(2) };
     console.log('EXPORT_SLOWDOWN', JSON.stringify(report));
-    fs.writeFileSync('/workspace/pr28-logs/prc-export-slowdown.json', JSON.stringify(report, null, 2));
+    fs.writeFileSync(testInfo.outputPath('prc-export-slowdown.json'), JSON.stringify(report, null, 2));
   });
 });
