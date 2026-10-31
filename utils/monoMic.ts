@@ -26,8 +26,15 @@ export const COLD_WARMUP_MS = 250;
 
 let warmed: Promise<void> | null = null;
 let warmPending = false;
-/** Forget a warm-up that was abandoned before it finished (its tracks were released). */
-export const abandonPendingWarmup = () => { if (warmPending) { warmed = null; warmPending = false; } };
+/** Running warm-ups, by the stream they recorded: each entry stops its recorder and its clone. */
+const warmups = new Map<MediaStream, () => void>();
+/** Stop the warm-up recording `stream`, if any (track.stop() fires no 'ended', so it must be explicit). */
+const stopWarmupOf = (stream: MediaStream) => warmups.get(stream)?.();
+/** Forget a warm-up that was abandoned before it finished, stopping its recorder and clone now. */
+export const abandonPendingWarmup = () => {
+  [...warmups.values()].forEach(done => done());
+  if (warmPending) { warmed = null; warmPending = false; }
+};
 const warmUpAudioRecorder = (stream: MediaStream, force = false): Promise<void> => {
   if (warmed && !force) return warmed;
   warmPending = true;
@@ -37,10 +44,11 @@ const warmUpAudioRecorder = (stream: MediaStream, force = false): Promise<void> 
       const type = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
       rec = type ? new MediaRecorder(stream.clone(), { mimeType: type }) : new MediaRecorder(stream.clone());
     } catch { resolve(); return; }
-    const done = () => { clearTimeout(timer); try { if (rec.state !== 'inactive') rec.stop(); } catch { /* ignore */ } rec.stream.getTracks().forEach(t => t.stop()); resolve(); };
+    const done = () => { clearTimeout(timer); warmups.delete(stream); try { if (rec.state !== 'inactive') rec.stop(); } catch { /* ignore */ } rec.stream.getTracks().forEach(t => t.stop()); resolve(); };
+    warmups.set(stream, done);
     const timer = setTimeout(done, 3000);
     rec.onstart = done;
-    // An abandoned warm-up (its source released) must not hold anyone up.
+    // A source ended by the device must not hold anyone up (a local stop() goes through stopWarmupOf).
     stream.getTracks().forEach(t => t.addEventListener('ended', done, { once: true }));
     try { rec.start(); } catch { done(); }
   });
@@ -94,12 +102,15 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
     coldStart: () => cold,
     release: () => {
       void keep;
+      stopWarmupOf(dest.stream);
       try { source.disconnect(); } catch { /* ignore */ }
       ctx.close().catch(() => {});
       dest.stream.getTracks().forEach(t => t.stop());
     },
     close: () => {
       void keep;
+      stopWarmupOf(dest.stream);
+      dest.stream.getTracks().forEach(t => t.stop());
       try { source.disconnect(); } catch { /* ignore */ }
       ctx.close().catch(() => {});
       input.getTracks().forEach(t => t.stop());

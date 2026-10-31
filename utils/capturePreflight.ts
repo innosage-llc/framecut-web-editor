@@ -77,5 +77,8 @@ export const cancelCapturePreflight = () => {
   expose();
 };
 
+// Leaving the page (navigation, tab close, bfcache) releases a running preflight's tracks too.
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => cancelCapturePreflight());
+
 /** Test seam: forget that the page already ran its preflight. */
 export const resetCapturePreflight = () => { cancelCapturePreflight(); state = 'idle'; current = null; };

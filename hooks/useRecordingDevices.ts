@@ -268,6 +268,13 @@ export const useRecordingDevices = ({ locked }: { locked: boolean }) => {
     return () => md.removeEventListener('devicechange', refresh);
   }, [refresh]);
 
+  // Leaving the page releases the mic preview (and any preflight on it) and the camera preview.
+  useEffect(() => {
+    const onHide = () => { stopMeter(); cameraStreamRef.current?.getTracks().forEach(t => t.stop()); };
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, [stopMeter]);
+
   useEffect(() => () => {
     stopMeter();
     cameraStreamRef.current?.getTracks().forEach(t => t.stop());
