@@ -5,7 +5,6 @@ import { DeviceOption } from '../hooks/useRecordingDevices';
 /**
  * #28: recording setup (macOS app behaviour). Microphone and camera are Off by default;
  * picking a device asks for permission, then shows a live level meter / camera preview.
- * Camera recording itself lands in a later PR; picking one here only previews it.
  */
 interface RecordingSetupProps {
   mics: DeviceOption[];
@@ -62,7 +61,7 @@ const RecordingSetup: React.FC<RecordingSetupProps> = ({
       {cameraId && (
         <div className="ml-6 flex items-center gap-2">
           <video ref={videoRef} muted playsInline aria-label="Camera preview" className="w-28 aspect-video rounded bg-black object-cover" />
-          <span className="text-[10px] text-zinc-500">Preview only — camera recording is coming soon.</span>
+          <span className="text-[10px] text-zinc-500">Recorded as a camera bubble.</span>
         </div>
       )}
       {cameraError && <p role="alert" className="ml-6 text-[11px] text-red-400">{cameraError}</p>}

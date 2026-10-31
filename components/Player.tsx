@@ -8,6 +8,11 @@ import { renderVideoFrame, renderMosaic, renderSpotlight, renderSubtitles, calcu
 import PropertyHUD from './PropertyHUD';
 import { getActiveClickRipples, renderClickRipples } from '../utils/clickPolish';
 import { BackgroundFrame, isFrameActive, getFrameContentRect, drawWallpaper, drawFramedContent } from '../utils/backgroundFrame';
+import { CameraFrameSource, asVideoSource } from '../utils/cameraFrameSource';
+
+type ExportFrameSlot = { src: string; source: CameraFrameSource | null; ready: Promise<CameraFrameSource | null> };
+import { CameraBubble, normalizeBubble, drawCameraBubble, cameraMediaTime, bubbleRect, clampBubblePosition, CAMERA_BUBBLE_LIMITS } from '../utils/cameraBubble';
+import CameraBubbleControls from './CameraBubbleControls';
 
 type TimedItem = { start: number; end: number };
 
@@ -88,6 +93,14 @@ interface PlayerProps {
   narrationSrc?: string | null;
   narrationClips?: Clip[];
   narrationTimeOffset?: number;
+  /** #28: camera recorded with the screen, drawn as a bubble on the screen clips that carry one. */
+  cameraSrc?: string | null;
+  cameraTimeOffset?: number;
+  cameraDuration?: number;
+  /** Selected timeline clip (shows the camera bubble inspector when it is a screen clip with a bubble). */
+  selectedClipId?: string | null;
+  /** Update one screen clip's bubble. withHistory=false during a drag / slider scrub (history taken at its start). */
+  onUpdateCameraBubble?: (clipId: string, bubble: CameraBubble, withHistory: boolean) => void;
   isNarrationMuted?: boolean;
 
   allSubtitles: Subtitle[]; 
@@ -157,6 +170,11 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   narrationSrc = null,
   narrationClips = [],
   narrationTimeOffset = 0,
+  cameraSrc = null,
+  cameraTimeOffset = 0,
+  cameraDuration = 0,
+  selectedClipId = null,
+  onUpdateCameraBubble,
   isNarrationMuted = false,
   audioPlaybackRate,
   allSubtitles,
@@ -274,6 +292,16 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   narrationTimeOffsetRef.current = narrationTimeOffset;
   const isNarrationMutedRef = useRef(isNarrationMuted);
   isNarrationMutedRef.current = isNarrationMuted;
+  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraSrcRef = useRef(cameraSrc);
+  cameraSrcRef.current = cameraSrc;
+  const cameraTimingRef = useRef({ offset: cameraTimeOffset, duration: cameraDuration });
+  // #28 realtime export: decoded camera frames and the screen's presented frame time.
+  const cameraFrameSourceRef = useRef<ExportFrameSlot | null>(null);
+  const screenFrameSourceRef = useRef<ExportFrameSlot | null>(null);
+  const cameraExportFrameRef = useRef<VideoFrame | null>(null);
+  const screenExportFrameRef = useRef<VideoFrame | null>(null);
+  cameraTimingRef.current = { offset: cameraTimeOffset, duration: cameraDuration };
 
   // Sync Props to Refs
   useEffect(() => { srcRef.current = src; }, [src]);
@@ -510,7 +538,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   });
 
   const pauseAllExportVideos = () => {
-      [introVideoRef.current, mainVideoRef.current, outroVideoRef.current].forEach(video => {
+      [introVideoRef.current, mainVideoRef.current, outroVideoRef.current, cameraVideoRef.current].forEach(video => {
           if (video && !video.paused) {
               video.pause();
           }
@@ -532,9 +560,56 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       }
   };
 
+  /** #28: the bubble to draw at `time` (screen clip's bubble + camera media time), or null. */
+  const resolveCameraAt = (time: number) => {
+      const cam = cameraVideoRef.current;
+      if (!cam || !cameraSrcRef.current) return null;
+      const clip = findActiveClip(activeClipsRef.current, time);
+      if (!clip || clip.mediaType !== 'main' || !clip.cameraBubble) return null;
+      const bubble = normalizeBubble(clip.cameraBubble);
+      if (!bubble.visible) return null;
+      const sourceTime = clip.sourceStart + (time - clip.offset) * clip.speed;
+      const { offset, duration } = cameraTimingRef.current;
+      const mediaTime = cameraMediaTime(sourceTime, offset, duration);
+      if (mediaTime === null) return null;
+      return { cam, bubble, mediaTime, clip };
+  };
+
+  /** Seek the camera to the frame for `time` and wait until that frame is presented (export / stills). */
+  const syncCameraExact = async (time: number, timeoutMs = 500) => {
+      const r = resolveCameraAt(time);
+      if (!r) return;
+      try { await waitForMediaReady(r.cam, 1); } catch { return; }
+      // Hold the last frame up to the recorded duration (the element may report a shorter length).
+      const end = Number.isFinite(r.cam.duration) && r.cam.duration > 0 ? r.cam.duration : Infinity;
+      await seekToPresentedFrame(r.cam, Math.min(r.mediaTime, Math.max(0, end - 0.001)), timeoutMs);
+  };
+
   // --- MEDIA SYNC LOGIC ---
   const syncMediaState = (time: number) => {
       if (isExportingRef.current) return;
+
+      // #28: camera follows the screen clip's source time (same drift handling as the screen video).
+      const cameraState = resolveCameraAt(time);
+      const camEl = cameraVideoRef.current;
+      if (camEl && cameraSrcRef.current) {
+          if (cameraState) {
+              const clip = cameraState.clip;
+              camEl.playbackRate = playbackRateRef.current * clip.speed;
+              const diff = Math.abs(camEl.currentTime - cameraState.mediaTime);
+              const driftThreshold = isPlayingRef.current ? 0.3 : 0.05;
+              if (diff > driftThreshold && camEl.readyState >= 1 && !(!isPlayingRef.current && camEl.seeking)) {
+                  camEl.currentTime = cameraState.mediaTime;
+              }
+              if (isPlayingRef.current && camEl.paused && camEl.readyState >= 2 && !camEl.ended) {
+                  camEl.play().catch(() => {});
+              } else if (!isPlayingRef.current && !camEl.paused) {
+                  camEl.pause();
+              }
+          } else if (!camEl.paused) {
+              camEl.pause();
+          }
+      }
 
       const videos = [
           { ref: introVideoRef, type: 'intro', src: introSrcRef.current },
@@ -704,6 +779,11 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   };
 
   const seekTo = async (time: number): Promise<void> => {
+      await seekScreenTo(time);
+      await syncCameraExact(time);
+  };
+
+  const seekScreenTo = async (time: number): Promise<void> => {
       const state = getFrameState(time);
       if (!state || !state.video || !state.src || state.src.startsWith('color:') || state.src.startsWith('image:')) {
           return Promise.resolve();
@@ -807,7 +887,79 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       return 'video';
   };
 
+
+  /** Lazily decode a recording once for realtime export (null if WebCodecs/container unsupported). */
+  const frameSourceFor = async (slot: React.MutableRefObject<ExportFrameSlot | null>, src: string | null | undefined) => {
+      if (!src || src.startsWith('color:') || src.startsWith('image:')) return null;
+      let fs = slot.current;
+      if (!fs || fs.src !== src) {
+          fs?.source?.close();
+          fs = { src, source: null, ready: (async () => {
+              try { return await CameraFrameSource.create(await (await fetch(src)).blob()); } catch { return null; }
+          })() };
+          slot.current = fs;
+      }
+      if (!fs.source) fs.source = await fs.ready;
+      return fs.source;
+  };
+
+  /**
+   * #28 realtime export (MP4): the screen recording (and the camera, when its bubble is shown) is
+   * decoded once (WebCodecs) and this export frame's frames are picked by timestamp — screen at the
+   * clip's source time, camera at the matching camera media time. Frame-exact, with no per-frame
+   * seek, and independent of how far the playing <video> got. 'unavailable' when the clip isn't the
+   * screen recording or WebCodecs / the container (non-WebM, e.g. Safari MP4) can't decode it.
+   */
+  const FALLBACK_SEEK_WAIT_MS = 150;
+  const syncDecodedFrames = async (time: number): Promise<'ok' | 'unavailable'> => {
+      cameraExportFrameRef.current = null;
+      screenExportFrameRef.current = null;
+      const clip = findActiveClip(activeClipsRef.current, time);
+      if (!clip || clip.mediaType !== 'main') return 'unavailable';
+      const screen = await frameSourceFor(screenFrameSourceRef, mainSrcRef.current);
+      if (!screen) return 'unavailable';
+      const screenFrame = await screen.frameAt(clip.sourceStart + (time - clip.offset) * clip.speed);
+      if (!screenFrame) return 'unavailable';
+      const r = resolveCameraAt(time);
+      if (r) {
+          const cam = await frameSourceFor(cameraFrameSourceRef, cameraSrcRef.current);
+          const camFrame = cam ? await cam.frameAt(r.mediaTime) : null;
+          if (!camFrame) return 'unavailable';
+          cameraExportFrameRef.current = camFrame;
+      }
+      screenExportFrameRef.current = screenFrame;
+      return 'ok';
+  };
+
   const syncExportPlayback = async (sourceTime: number): Promise<void> => {
+      const time = currentTimeRef.current;
+      if (exportPlaybackModeRef.current !== 'playback') {
+          // Non-realtime export (GIF, 'frame'): exact seeks of the screen and the camera.
+          await syncScreenExportPlayback(sourceTime);
+          await syncCameraExact(time);
+          return;
+      }
+      if (await syncDecodedFrames(time) === 'ok') {
+          // Frames come from the decoders; the playing element only keeps the export paced.
+          await syncScreenExportPlayback(sourceTime);
+          return;
+      }
+      if (resolveCameraAt(time) || exportPlaybackVideoRef.current?.paused) {
+          // No decoder (no WebCodecs, or a non-WebM recording): a camera seek per frame is too slow
+          // for the screen to keep playing in realtime (it ran ahead and froze, QA #49 B1), so hold
+          // the screen and seek both to this frame exactly.
+          // Once paused, keep seeking even after the camera ends or the bubble is hidden;
+          // the playback synchronizer only waits for a running video and cannot advance it.
+          // Both seeks run together; a paused element may not fire a frame callback, so the wait for
+          // the presented frame is capped lower than the GIF path's.
+          const screen = exportPlaybackVideoRef.current;
+          await Promise.all([screen ? seekToPresentedFrame(screen, sourceTime, FALLBACK_SEEK_WAIT_MS) : null, syncCameraExact(time, FALLBACK_SEEK_WAIT_MS)]);
+          return;
+      }
+      await syncScreenExportPlayback(sourceTime);
+  };
+
+  const syncScreenExportPlayback = async (sourceTime: number): Promise<void> => {
       const video = exportPlaybackVideoRef.current;
       const mode = exportPlaybackModeRef.current;
 
@@ -866,6 +1018,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
 
   const stopExportPlayback = () => {
       pauseAllExportVideos();
+      cameraExportFrameRef.current = null;
+      screenExportFrameRef.current = null;
+      for (const slot of [cameraFrameSourceRef, screenFrameSourceRef]) { slot.current?.source?.close(); slot.current = null; }
       exportPlaybackVideoRef.current = null;
       exportPlaybackModeRef.current = null;
   };
@@ -940,7 +1095,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
     }
 
     const frameState = getFrameState(currentGlobalTime);
-    const video = frameState?.video || null;
+    const decodedScreen = renderForExport && exportPlaybackModeRef.current === 'playback' && frameState?.clip.mediaType === 'main'
+        ? screenExportFrameRef.current : null;
+    const video = (decodedScreen ? asVideoSource(decodedScreen) : frameState?.video) || null;
     const currentSrc = frameState?.src || null;
     const currentSourceTime = frameState?.sourceTime ?? null;
     const activeClipTiming = frameState ? { offset: frameState.clip.offset, sourceStart: frameState.clip.sourceStart, speed: frameState.clip.speed } : null;
@@ -1048,13 +1205,31 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
         }
     }
 
-    renderSubtitles(ctx, subtitlesToRender, cw, ch, null, !renderForExport && playing);
-
-    if (frameRect && ctx !== outerCtx) {
+    // Draw order (#28, macOS app): screen → effects → background frame → camera bubble → subtitles.
+    const framed = !!frameRect && ctx !== outerCtx;
+    if (framed) {
         outerCtx.setTransform(1, 0, 0, 1, 0, 0);
         outerCtx.clearRect(0, 0, canvas.width, canvas.height);
         drawWallpaper(outerCtx, canvas.width, canvas.height, frameSettings!, bgColor, wallpaperImageRef.current);
-        drawFramedContent(outerCtx, frameContentCanvasRef.current, frameRect, frameSettings!);
+        drawFramedContent(outerCtx, frameContentCanvasRef.current, frameRect!, frameSettings!);
+    }
+
+    const camera = resolveCameraAt(currentGlobalTime);
+    const decodedCam = isExportingRef.current && exportPlaybackModeRef.current === 'playback' ? cameraExportFrameRef.current : null;
+    if (camera && decodedCam && !editingCrop && !isEditingZoomState) {
+        drawCameraBubble(outerCtx, decodedCam, camera.bubble, canvas.width, canvas.height);
+    } else if (camera && camera.cam.readyState >= 2 && !editingCrop && !isEditingZoomState) {
+        drawCameraBubble(outerCtx, camera.cam, camera.bubble, canvas.width, canvas.height);
+    }
+
+    if (framed) {
+        // Subtitles keep their padded-rect coordinates, drawn above the frame and the bubble.
+        outerCtx.save();
+        outerCtx.setTransform(1, 0, 0, 1, frameRect!.x, frameRect!.y);
+        renderSubtitles(outerCtx, subtitlesToRender, cw, ch, null, !renderForExport && playing);
+        outerCtx.restore();
+    } else {
+        renderSubtitles(ctx, subtitlesToRender, cw, ch, null, !renderForExport && playing);
     }
 
     if (isCapturingCover) {
@@ -1156,6 +1331,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       activeClips,
       canvasBackgroundColor,
       backgroundFrame,
+      cameraSrc,
+      cameraTimeOffset,
+      cameraDuration,
       containerSize.width,
       containerSize.height
   ]);
@@ -1174,6 +1352,18 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       videos.forEach(v => { v.addEventListener('seeked', redraw); v.addEventListener('loadeddata', redraw); });
       return () => videos.forEach(v => { v.removeEventListener('seeked', redraw); v.removeEventListener('loadeddata', redraw); });
   }, [introSrc, mainSrc, outroSrc]);
+
+  useEffect(() => {
+      const cam = cameraVideoRef.current;
+      if (!cam) return;
+      const redraw = () => {
+          if (isPlayingRef.current || isExportingRef.current || exportCanvasLockRef.current || internalPreviewTimeRef.current !== null) return;
+          renderFrame('preview');
+      };
+      cam.addEventListener('seeked', redraw);
+      cam.addEventListener('loadeddata', redraw);
+      return () => { cam.removeEventListener('seeked', redraw); cam.removeEventListener('loadeddata', redraw); };
+  }, [cameraSrc]);
 
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
     const video = e.currentTarget;
@@ -1244,6 +1434,45 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   else if (selectedMosaicEffect) currentSelection = { type: 'mosaic', id: selectedMosaicEffect.id };
 
   const selectedSubtitle = selectedSubtitleId ? allSubtitles.find(s => s.id === selectedSubtitleId) : undefined;
+
+  // #28: camera bubble editing (paused, not exporting). Edits the screen clip under the playhead.
+  const bubbleClip = (!isPlaying && !isExporting && !isEditingCrop && cameraSrc)
+      ? (activeClips ?? []).find(c => c.mediaType === 'main' && c.cameraBubble && currentTime >= c.offset && currentTime < getClipEnd(c)) ?? null
+      : null;
+  const bubbleForUI = bubbleClip ? normalizeBubble(bubbleClip.cameraBubble) : null;
+  const bubbleUIRect = bubbleForUI && bubbleForUI.visible && containerSize.width > 0
+      && cameraMediaTime(bubbleClip!.sourceStart + (currentTime - bubbleClip!.offset) * bubbleClip!.speed, cameraTimeOffset, cameraDuration) !== null
+      ? bubbleRect(bubbleForUI, containerSize.width, containerSize.height) : null;
+  const inspectorClip = selectedClipId ? (activeClips ?? []).find(c => c.id === selectedClipId && c.mediaType === 'main' && c.cameraBubble) ?? null : null;
+
+  const handleBubbleMouseDown = (e: React.MouseEvent, mode: 'move' | 'resize') => {
+      if (!bubbleClip || !bubbleForUI || !contentRef.current || !onUpdateCameraBubble) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = contentRef.current.getBoundingClientRect();
+      const W = rect.width, H = rect.height;
+      const start = { x: e.clientX, y: e.clientY, bubble: bubbleForUI, r: bubbleRect(bubbleForUI, W, H) };
+      const clipId = bubbleClip.id;
+      let tookHistory = false; // one undo step per drag, taken on the first real move
+      const onMove = (ev: MouseEvent) => {
+          const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+          let next = start.bubble;
+          if (mode === 'move') {
+              const p = clampBubblePosition(start.bubble, W, H, (start.r.x + dx) / W, (start.r.y + dy) / H);
+              next = { ...start.bubble, ...p };
+          } else {
+              const short = Math.min(W, H);
+              const size = Math.min(CAMERA_BUBBLE_LIMITS.size.max, Math.max(CAMERA_BUBBLE_LIMITS.size.min, (start.r.width + dx) / short));
+              const sized = { ...start.bubble, size };
+              next = { ...sized, ...clampBubblePosition(sized, W, H, start.r.x / W, start.r.y / H) };
+          }
+          onUpdateCameraBubble(clipId, next, !tookHistory);
+          tookHistory = true;
+      };
+      const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+  };
   
   const activeSubsForCanvas = allSubtitles; // Logic moved to renderFrame
 
@@ -1253,6 +1482,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       {mainSrc && !mainSrc.startsWith('color:') && !mainSrc.startsWith('image:') && <video ref={mainVideoRef} src={mainSrc} className="hidden" onLoadedMetadata={handleLoadedMetadata} playsInline muted={isMuted} crossOrigin="anonymous" />}
       {outroSrc && !outroSrc.startsWith('color:') && !outroSrc.startsWith('image:') && <video ref={outroVideoRef} src={outroSrc} className="hidden" onLoadedMetadata={handleLoadedMetadata} playsInline muted={isMuted} crossOrigin="anonymous" />}
       <audio ref={audioRef} src={audioSrc || undefined} className="hidden" crossOrigin="anonymous" />
+      {cameraSrc && <video ref={cameraVideoRef} src={cameraSrc} className="hidden" playsInline muted preload="auto" data-testid="camera-video" />}
       <audio ref={narrationRef} src={narrationSrc || undefined} className="hidden" preload="auto" data-testid="narration-audio" />
 
       <div 
@@ -1287,6 +1517,13 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
                     onSelectSpotlightEffect('');
                     onSelectMosaicEffect('');
                 }}
+            />
+        )}
+
+        {inspectorClip && onUpdateCameraBubble && !isExporting && !isPlaying && (
+            <CameraBubbleControls
+                bubble={normalizeBubble(inspectorClip.cameraBubble)}
+                onChange={(b, withHistory) => onUpdateCameraBubble(inspectorClip.id, b, withHistory)}
             />
         )}
 
@@ -1328,6 +1565,21 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
                 </div>
             </div>
           </div>
+        )}
+
+        {bubbleUIRect && bubbleForUI && (
+            <div
+                data-testid="camera-bubble-handle"
+                className={`absolute z-20 cursor-move ring-1 ring-blue-400/70 hover:ring-2 ${bubbleForUI.shape === 'circle' ? 'rounded-full' : bubbleForUI.shape === 'rounded' ? 'rounded-xl' : ''}`}
+                style={{ left: bubbleUIRect.x, top: bubbleUIRect.y, width: bubbleUIRect.width, height: bubbleUIRect.height, touchAction: 'none' }}
+                onMouseDown={(e) => handleBubbleMouseDown(e, 'move')}
+            >
+                <div
+                    data-testid="camera-bubble-resize"
+                    className="absolute -right-1.5 -bottom-1.5 w-3 h-3 bg-white border border-blue-500 rounded-full cursor-nwse-resize"
+                    onMouseDown={(e) => handleBubbleMouseDown(e, 'resize')}
+                />
+            </div>
         )}
 
         <div ref={overlayRef} data-testid="effect-overlay-layer" className="z-30" style={overlayLayerStyle}>
