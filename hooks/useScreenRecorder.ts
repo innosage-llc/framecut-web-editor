@@ -5,7 +5,7 @@ import { generateId, formatTimeShort } from '../utils';
 import { useCaptureSession, CaptureSourceSpec } from './useCaptureSession';
 import { sessionToMediaTime, companionTimeOffset } from '../utils/captureClock';
 import type { RecordingImportExtras } from './useAssetOperations';
-import { MIC_CONSTRAINTS, describeMediaError } from './useRecordingDevices';
+import { MIC_CONSTRAINTS, CAMERA_CONSTRAINTS, describeMediaError } from './useRecordingDevices';
 import { createMonoMicStream, MonoMic } from '../utils/monoMic';
 import { rebaseWebmToAudioStart } from '../utils/webmAudioLead';
 import { cancelCapturePreflight } from '../utils/capturePreflight';
@@ -20,6 +20,8 @@ interface UseScreenRecorderProps {
 export interface StartRecordingOptions {
   /** '' or undefined = microphone Off. */
   micDeviceId?: string;
+  /** '' or undefined = camera Off. */
+  cameraDeviceId?: string;
 }
 
 export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRecorderProps) => {
@@ -42,6 +44,8 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
   const finishingRef = useRef(false);
   const micSettingsRef = useRef<{ sampleRate: number; channelCount: number; deviceSampleRate?: number; deviceChannelCount?: number } | null>(null);
   const monoMicRef = useRef<MonoMic | null>(null);
+  const cameraSettingsRef = useRef<{ width?: number; height?: number; frameRate?: number } | null>(null);
+  const cameraEndedEarlyRef = useRef(false);
   /** Identifies the live session; stale `ended` handlers from an earlier stream are ignored. */
   const sessionStreamRef = useRef<MediaStream | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
@@ -152,15 +156,26 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       const micA = mic ? probes?.probes[1].firstAfter(perfOf(mic.requestedOffset)) ?? null : null;
       const anchored = scrA !== null && micA !== null;
       const narrationOffset = !mic ? 0 : anchored ? (micA! - scrA!) / 1000 : companionTimeOffset(screen, { ...mic, flowingAtStart: micFlowingRef.current }, screenAudioLead);
-      const extras: RecordingImportExtras | undefined = mic && mic.blob.size > 0
-        ? { narration: { blob: mic.blob, timeOffset: narrationOffset, duration: Math.max(0, mic.stopOffset - mic.startOffset) } }
-        : undefined;
+      const extrasAcc: RecordingImportExtras = {};
+      if (mic && mic.blob.size > 0) {
+        extrasAcc.narration = { blob: mic.blob, timeOffset: narrationOffset, duration: Math.max(0, mic.stopOffset - mic.startOffset) };
+      }
+      // #28: camera, aligned the same way. After a disconnect its duration ends at the last frame.
+      const cam = result.sources.find(src => src.id === 'camera');
+      if (cam && cam.blob.size > 0) {
+        extrasAcc.camera = { blob: cam.blob, timeOffset: companionTimeOffset(screen, cam, screenAudioLead), duration: Math.max(0, cam.stopOffset - cam.startOffset) };
+      }
+      const extras: RecordingImportExtras | undefined = extrasAcc.narration || extrasAcc.camera ? extrasAcc : undefined;
       if ((window as any).__FRAMECUT_E2E_ENABLED__) {
         (window as any).__FRAMECUT_LAST_CAPTURE__ = {
           sources: result.sources.map(src => ({ id: src.id, kind: src.kind, mimeType: src.mimeType, size: src.blob.size, requestedOffset: src.requestedOffset, startOffset: src.startOffset, stopOffset: src.stopOffset })),
           narrationTimeOffset: extras?.narration?.timeOffset ?? null,
           micSettings: micSettingsRef.current,
           micBlob: mic?.blob ?? null,
+          cameraTimeOffset: extras?.camera?.timeOffset ?? null,
+          cameraDuration: extras?.camera?.duration ?? null,
+          cameraSettings: cameraSettingsRef.current,
+          cameraEndedEarly: cameraEndedEarlyRef.current,
           screenBlob: screen.blob,
           durationHint,
           screenAudioLead,
@@ -180,6 +195,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
   const handleStartScreenRecording = async (options: StartRecordingOptions = {}) => {
     let stream: MediaStream | null = null;
     let micStream: MediaStream | null = null;
+    let cameraStream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       // The preflight warm-up may run on through the source picker but never delays recording:
@@ -193,6 +209,15 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
           micStream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS(options.micDeviceId) });
         } catch (e) {
           onNotice?.(describeMediaError(e, 'Microphone') + ' Recording without narration.');
+        }
+      }
+      cameraSettingsRef.current = null;
+      cameraEndedEarlyRef.current = false;
+      if (options.cameraDeviceId) {
+        try {
+          cameraStream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS(options.cameraDeviceId), audio: false });
+        } catch (e) {
+          onNotice?.(describeMediaError(e, 'Camera') + ' Recording without the camera.');
         }
       }
       recordingMarkersRef.current = [];
@@ -212,6 +237,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       // One session clock for every source (#28).
       const specs: CaptureSourceSpec[] = [{ id: 'screen', kind: 'video', stream }];
       let onMicEnded: (() => void) | null = null;
+      let onCamEnded: (() => void) | null = null;
       if (micStream) {
         const micTrack = micStream.getAudioTracks()[0];
         const device = micTrack?.getSettings?.() ?? {};
@@ -242,11 +268,26 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
         };
         specs.push({ id: 'mic', kind: 'audio', stream: mono?.stream ?? micStream });
       }
+      if (cameraStream) {
+        const camTrack = cameraStream.getVideoTracks()[0];
+        const st = camTrack?.getSettings?.() ?? {};
+        cameraSettingsRef.current = { width: st.width as number | undefined, height: st.height as number | undefined, frameRate: st.frameRate as number | undefined };
+        // Disconnect: stop only the camera; it ends on its last frame and the bubble disappears after it.
+        const camSession = stream;
+        onCamEnded = () => {
+          if (sessionStreamRef.current !== camSession) return; // stale track from another session
+          cameraEndedEarlyRef.current = true;
+          captureSession.stopSource('camera');
+          onNotice?.('Camera disconnected. The camera bubble ends at its last frame; the screen is still recording.');
+        };
+        specs.push({ id: 'camera', kind: 'video', stream: cameraStream });
+      }
       probesRef.current?.stop();
       probesRef.current = null;
       const screenAudio = stream.getAudioTracks()[0];
-      if (specs.length > 1 && screenAudio) {
-        const probes = createProbeSet([screenAudio, specs[1].stream.getAudioTracks()[0]]);
+      const micSpec = specs.find(sp => sp.id === 'mic');
+      if (micSpec && screenAudio) {
+        const probes = createProbeSet([screenAudio, micSpec.stream.getAudioTracks()[0]]);
         if (probes && await probes.ready) probesRef.current = probes; else probes?.stop();
       }
       // start() tears everything down itself and throws if a recorder can't start.
@@ -257,6 +298,7 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       // Only the live session's stream may end it (a stale stream from a failed start must not).
       stream.getVideoTracks()[0].onended = () => { if (sessionStreamRef.current === sessionStream) void finishSession(); };
       if (onMicEnded) micStream?.getAudioTracks()[0]?.addEventListener('ended', onMicEnded);
+      if (onCamEnded) cameraStream?.getVideoTracks()[0]?.addEventListener('ended', onCamEnded);
       recordingStartTimeRef.current = performance.now();
       setIsScreenRecording(true);
     } catch (err: any) {
@@ -270,6 +312,8 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       monoMicRef.current?.close();
       monoMicRef.current = null;
       micStream?.getTracks().forEach(t => { try { t.stop(); } catch { /* ignore */ } });
+      // ...nor a live camera.
+      cameraStream?.getTracks().forEach(t => { try { t.stop(); } catch { /* ignore */ } });
       setIsScreenRecording(false);
       if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
       

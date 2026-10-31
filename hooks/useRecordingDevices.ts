@@ -1,5 +1,6 @@
 import { runCapturePreflight, cancelCapturePreflight } from '../utils/capturePreflight';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { cameraResolutionFor } from '../utils/cameraBubble';
 
 /**
  * #28: recording setup devices (macOS app behaviour): microphone and camera default to Off,
@@ -30,12 +31,16 @@ export const MIC_CONSTRAINTS = (deviceId: string): MediaTrackConstraints => ({
   autoGainControl: false,
 });
 
-export const CAMERA_CONSTRAINTS = (deviceId: string): MediaTrackConstraints => ({
-  ...deviceIdConstraint(deviceId),
-  width: { ideal: 1280 },
-  height: { ideal: 720 },
-  frameRate: { ideal: 30 },
-});
+/** 720p ('ideal', so any camera still opens); 480p when the device reports ≤ 4 GB of RAM. */
+export const CAMERA_CONSTRAINTS = (deviceId: string): MediaTrackConstraints => {
+  const { width, height } = cameraResolutionFor((navigator as any).deviceMemory);
+  return {
+    ...deviceIdConstraint(deviceId),
+    width: { ideal: width },
+    height: { ideal: height },
+    frameRate: { ideal: 30 },
+  };
+};
 
 export const describeMediaError = (e: any, device: 'Microphone' | 'Camera'): string => {
   switch (e?.name) {

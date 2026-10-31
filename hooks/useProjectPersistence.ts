@@ -101,6 +101,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
             outro: stripWaveform(persistentState.outro),
             audio: stripWaveform(persistentState.audio),
             narration: stripWaveform(persistentState.narration ?? null),
+            camera: stripWaveform(persistentState.camera ?? null),
             currentTime: 0, 
             zoomLevel: persistentState.zoomLevel || 50
         };
@@ -200,6 +201,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                 const restoredOutro = await restoreAsset(parsed.outro);
                 const restoredAudio = await restoreAsset(parsed.audio);
                 const restoredNarration = await restoreAsset(parsed.narration ?? null);
+                const restoredCamera = await restoreAsset(parsed.camera ?? null);
 
                 if (isResettingRef.current) return;
 
@@ -211,6 +213,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                     outro: restoredOutro,
                     audio: restoredAudio,
                     narration: restoredNarration,
+                    camera: restoredCamera,
                     narrationClips: parsed.narrationClips ?? [],
                     mutedAudioRoles: parsed.mutedAudioRoles ?? (parsed.isAudioTrackMuted ? ['music'] : []),
                     isPlaying: false,
@@ -303,6 +306,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
             stateToSave.outro = await processAsset(stateToSave.outro);
             stateToSave.audio = await processAsset(stateToSave.audio);
             stateToSave.narration = await processAsset(stateToSave.narration ?? null);
+            stateToSave.camera = await processAsset(stateToSave.camera ?? null);
 
             zip.file("project.json", JSON.stringify(stateToSave, null, 2));
 
@@ -369,6 +373,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                     projectState.outro = await restoreAssetFromZip(projectState.outro);
                     projectState.audio = await restoreAssetFromZip(projectState.audio);
                     projectState.narration = await restoreAssetFromZip(projectState.narration ?? null);
+                    projectState.camera = await restoreAssetFromZip(projectState.camera ?? null);
 
                 } else {
                     const text = await file.text();
@@ -391,6 +396,7 @@ export const useProjectPersistence = ({ state, setState, recalculateDuration }: 
                     ...projectState,
                     backgroundFrame: normalizeBackgroundFrame(projectState.backgroundFrame),
                     narration: projectState.narration ?? null,
+                    camera: projectState.camera ?? null,
                     narrationClips: projectState.narrationClips ?? [],
                     mutedAudioRoles: projectState.mutedAudioRoles ?? (projectState.isAudioTrackMuted ? ['music'] : []),
                     duration,

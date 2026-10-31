@@ -28,6 +28,7 @@ installDefaultTranscriber(createWhisperTranscriber());
 import { VideoExportFormat, VideoExportSettings } from './utils/exportPresets';
 import { PlayerRef, Subtitle, ZoomEffect, SpotlightEffect, MosaicEffect, Clip, RecordingEvent, AudioRole } from './types';
 import { useRecordingDevices } from './hooks/useRecordingDevices';
+import { CameraBubble, normalizeBubble } from './utils/cameraBubble';
 import RecordingSetup from './components/RecordingSetup';
 import { effectiveMutedRoles } from './utils/audioLanes';
 import { renderProjectAudio } from './utils/audioRenderer';
@@ -78,10 +79,16 @@ const App: React.FC = () => {
   const recordingDevices = useRecordingDevices({ locked: isScreenRecording });
   const startRecordingWithSetup = useCallback(() => {
     const micDeviceId = recordingDevices.micId;
+    const cameraDeviceId = recordingDevices.cameraId;
     recordingDevices.releasePreviews();
-    handleStartScreenRecording({ micDeviceId });
+    handleStartScreenRecording({ micDeviceId, cameraDeviceId });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordingDevices.micId, recordingDevices.releasePreviews, handleStartScreenRecording]);
+  }, [recordingDevices.micId, recordingDevices.cameraId, recordingDevices.releasePreviews, handleStartScreenRecording]);
+  // #28: camera bubble edits (inspector + canvas drag). withHistory=false for live drag/slider updates.
+  const handleUpdateCameraBubble = useCallback((clipId: string, bubble: CameraBubble, withHistory: boolean) => {
+    if (withHistory) pushHistory();
+    setState(prev => ({ ...prev, clips: prev.clips.map(c => c.id === clipId && c.cameraBubble ? { ...c, cameraBubble: normalizeBubble(bubble) } : c) }));
+  }, [pushHistory, setState]);
   const mutedRoles = effectiveMutedRoles(state);
   
   const { handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
@@ -185,7 +192,17 @@ const App: React.FC = () => {
         linkedClips: state.clips.map(c => ({ id: c.id, recordingLinkID: c.recordingLinkID ?? null, muted: !!c.muted })),
         mutedAudioRoles: state.mutedAudioRoles ?? [],
         isAudioTrackMuted: !!state.isAudioTrackMuted,
+        camera: state.camera ? { timeOffset: state.camera.timeOffset ?? 0, duration: state.camera.duration, stored: !!state.camera.storageId } : null,
+        cameraBubbles: state.clips.map(c => ({ id: c.id, sourceStart: c.sourceStart, sourceEnd: c.sourceEnd, offset: c.offset, speed: c.speed, recordingLinkID: c.recordingLinkID ?? null, cameraBubble: c.cameraBubble ?? null })),
       }),
+      /** #28: import a recording with a camera (and optional narration), same path as a real recording. */
+      loadWithCamera: async (blob: Blob, events: RecordingEvent[], durationHint: number, cameraBlob: Blob, timeOffset: number, cameraDuration: number) => {
+        await handleLoadProject(blob, 'E2E Camera Recording', events, durationHint, { camera: { blob: cameraBlob, timeOffset, duration: cameraDuration } });
+      },
+      updateCameraBubble: (clipId: string, patch: Partial<CameraBubble>) => {
+        const clip = stateRef.current.clips.find(c => c.id === clipId);
+        if (clip?.cameraBubble) handleUpdateCameraBubble(clipId, { ...clip.cameraBubble, ...patch }, true);
+      },
       /** #28: import a recording with microphone narration (same path as a real recording). */
       loadWithNarration: async (blob: Blob, events: RecordingEvent[], durationHint: number, narrationBlob: Blob, timeOffset: number, narrationDuration: number) => {
         await handleLoadProject(blob, 'E2E Narrated Recording', events, durationHint, { narration: { blob: narrationBlob, timeOffset, duration: narrationDuration } });
@@ -258,7 +275,7 @@ const App: React.FC = () => {
       redo: () => handleRedo(),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef, subtitleTools.setTimeoutMs, handleUndo, handleRedo, handleUpdateSubtitle, pushHistory, state.narration, state.narrationClips, state.mutedAudioRoles, state.isAudioTrackMuted, handleSplit, handleDelete, handleClipSpeedChange, handleUpdateClip, handleSetAudioRoleMuted, handleToggleNarrationClipMute]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef, subtitleTools.setTimeoutMs, handleUndo, handleRedo, handleUpdateSubtitle, pushHistory, state.narration, state.narrationClips, state.mutedAudioRoles, state.isAudioTrackMuted, handleSplit, handleDelete, handleClipSpeedChange, handleUpdateClip, handleSetAudioRoleMuted, handleToggleNarrationClipMute, handleUpdateCameraBubble, state.camera]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
@@ -381,6 +398,11 @@ const App: React.FC = () => {
                 narrationSrc={state.narration?.src ?? null}
                 narrationClips={state.narrationClips ?? []}
                 narrationTimeOffset={state.narration?.timeOffset ?? 0}
+                cameraSrc={state.camera?.src ?? null}
+                cameraTimeOffset={state.camera?.timeOffset ?? 0}
+                cameraDuration={state.camera?.duration ?? 0}
+                selectedClipId={state.selection?.type === 'clip' ? state.selection.id : null}
+                onUpdateCameraBubble={handleUpdateCameraBubble}
                 isNarrationMuted={mutedRoles.has('narration')}
                 audioPlaybackRate={audioCtx.playbackRate}
                 allSubtitles={state.subtitles} 
