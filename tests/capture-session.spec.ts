@@ -77,7 +77,8 @@ test('screen recording records start offset, real mime type and re-based events'
   expect(screen.startOffset).toBeGreaterThanOrEqual(screen.requestedOffset);
   expect(screen.startOffset - screen.requestedOffset).toBeLessThan(2);
   expect(screen.stopOffset).toBeGreaterThan(screen.requestedOffset + 2.5);
-  expect(cap.durationHint).toBeCloseTo(screen.stopOffset - screen.requestedOffset, 6);
+  // The imported screen timeline begins at its first audio packet, not the recorder call.
+  expect(cap.durationHint).toBeCloseTo(screen.stopOffset - screen.requestedOffset - cap.screenAudioLead, 6);
   await page.waitForFunction(() => (window as any).__FRAMECUT_E2E__?.getSnapshot().hasMainVideo, null, { timeout: 15000 });
   const snap = await page.evaluate(() => (window as any).__FRAMECUT_E2E__.getSnapshot());
   const times: number[] = snap.recordingEvents.map((e: any) => e.time);

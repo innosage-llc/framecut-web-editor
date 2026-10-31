@@ -90,7 +90,8 @@ test.describe('#26 P1 evidence with a visible test video', () => {
     for (let i = 1; i <= 10; i++) await page.mouse.move(x0 + (x1 - x0) * i / 10, y);
     await page.mouse.up();
     const m = (await E2E(page)).mosaicEffects[0];
-    const pts = m.paths.flatMap((p: any) => p.points);
+    expect(m.paths).toHaveLength(1);
+    const pts = m.paths[0].points;
     expect(pts.length).toBeGreaterThan(3);
     // Points are in % of the padded content rect, so they match the pointer % in the layer.
     expect(Math.abs(pts[0].x - 30)).toBeLessThan(1.5);
@@ -190,7 +191,9 @@ test.describe('#26 P1 evidence with a visible test video', () => {
       await page.mouse.move(x0, y); await page.mouse.down();
       for (let i = 1; i <= 10; i++) await page.mouse.move(x0 + (x1 - x0) * i / 10, y);
       await page.mouse.up();
-      const pts = (await E2E(page)).mosaicEffects[0].paths.flatMap((p: any) => p.points);
+      const paths = (await E2E(page)).mosaicEffects[0].paths;
+      expect(paths).toHaveLength(1);
+      const pts = paths[0].points;
       expect(pts.length).toBeGreaterThan(3);
       expect(Math.abs(pts[0].x - 50)).toBeLessThan(1.5);
       expect(Math.abs(pts[pts.length - 1].x - 70)).toBeLessThan(1.5);

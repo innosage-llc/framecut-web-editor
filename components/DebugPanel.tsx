@@ -67,6 +67,7 @@ export const DebugPanel: React.FC<DebugPanelProps> = ({ state, videoTime }) => {
 
     return (
         <div 
+            role="region" aria-label="Performance Diagnostic"
             className={`fixed z-[9999] bg-black/90 text-green-400 p-4 rounded-md font-mono text-xs border border-green-900 shadow-xl pointer-events-auto opacity-90 hover:opacity-100 transition-opacity select-none ${isDragging ? 'cursor-grabbing shadow-2xl scale-[1.02]' : ''}`}
             style={{ 
                 top: `${position.top}px`, 

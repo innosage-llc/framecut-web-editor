@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Performance Debug Panel', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
+    await expect(page.getByRole('button', { name: 'Toggle Performance Debug (D)' })).toBeVisible();
   });
 
   test('should toggle debug panel via toolbar button', async ({ page }) => {
@@ -30,7 +31,7 @@ test.describe('Performance Debug Panel', () => {
 
   test('should be draggable', async ({ page }) => {
     await page.keyboard.press('d');
-    const panel = page.locator('text=Performance Diagnostic').locator('..').locator('..'); // Get the container
+    const panel = page.getByRole('region', { name: 'Performance Diagnostic' }); // Get the container
     
     const initialBox = await panel.boundingBox();
     if (!initialBox) throw new Error('Could not find panel bounding box');

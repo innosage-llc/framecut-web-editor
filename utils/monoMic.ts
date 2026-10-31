@@ -5,6 +5,8 @@
  */
 export interface MonoMic {
   stream: MediaStream;
+  /** Screen audio rendered on the same Web Audio clock as narration, retaining its channels. */
+  referenceStream?: MediaStream;
   /** Resolves once the graph is rendering (samples flow into `stream`). */
   ready: Promise<void>;
   /** True once `ready` saw samples flowing out of the graph (so a recorder started now begins at start()). */
@@ -57,7 +59,7 @@ const warmUpAudioRecorder = (stream: MediaStream, force = false): Promise<void> 
   return warmed;
 };
 
-export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean } = {}): MonoMic | null => {
+export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean; reference?: MediaStream } = {}): MonoMic | null => {
   const AC = window.AudioContext || (window as any).webkitAudioContext;
   if (!AC) return null;
   let ctx: AudioContext;
@@ -72,17 +74,29 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
   dest.channelCountMode = 'explicit';
   dest.channelInterpretation = 'speakers';
   source.connect(dest);
+  // Processing only narration adds a graph-input buffer relative to the raw screen track. Render
+  // both in this context so their encoded samples share the same buffering and sample clock.
+  const referenceSource = opts.reference ? ctx.createMediaStreamSource(opts.reference) : null;
+  const referenceDest = referenceSource ? ctx.createMediaStreamDestination() : null;
+  if (referenceDest) {
+    referenceDest.channelCount = opts.reference!.getAudioTracks()[0]?.getSettings().channelCount ?? 2;
+    referenceDest.channelCountMode = 'explicit';
+    referenceSource!.connect(referenceDest);
+  }
   let flowed = false;
   let cold = false;
+  let released = false;
   const ready = (async () => {
     try { await ctx.resume?.(); } catch { /* ignore */ }
+    if (released) return;
     // Wait until mono samples actually flow out of the graph, so the narration recorder's media
     // time 0 is when start() is called (a cold device/context can otherwise begin hundreds of ms
     // late). Uses the track's delivered-frame counter where supported, else the context clock.
     const out = dest.stream.getAudioTracks()[0] as MediaStreamTrack & { stats?: { deliveredFrames?: number } };
     const flowing = () => (out?.stats && typeof out.stats.deliveredFrames === 'number' ? out.stats.deliveredFrames > 0 : ctx.currentTime > 0);
     const t = performance.now();
-    while (!flowing() && performance.now() - t < 3000) await new Promise(r => setTimeout(r, 5));
+    while (!released && !flowing() && performance.now() - t < 3000) await new Promise(r => setTimeout(r, 5));
+    if (released) return;
     flowed = flowing();
     // The first audio MediaRecorder in a page can take over a second to initialise its encoder and
     // drops the samples captured meanwhile, so narration would start late. Warm it up once here.
@@ -92,9 +106,10 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
     cold = !opts.rewarm && first && performance.now() - w0 > COLD_WARMUP_MS;
   })();
   // Keep the graph referenced for the life of the recording (avoids GC of the source node).
-  const keep = { source, dest };
+  const keep = { source, dest, referenceSource, referenceDest };
   return {
     stream: dest.stream,
+    referenceStream: referenceDest?.stream,
     ready,
     flowing: () => flowed,
     sampleRate: ctx.sampleRate,
@@ -102,18 +117,25 @@ export const createMonoMicStream = (input: MediaStream, opts: { rewarm?: boolean
     coldStart: () => cold,
     release: () => {
       void keep;
+      released = true;
       stopWarmupOf(dest.stream);
       try { source.disconnect(); } catch { /* ignore */ }
+      try { referenceSource?.disconnect(); } catch { /* ignore */ }
       ctx.close().catch(() => {});
       dest.stream.getTracks().forEach(t => t.stop());
+      referenceDest?.stream.getTracks().forEach(t => t.stop());
     },
     close: () => {
       void keep;
+      released = true;
       stopWarmupOf(dest.stream);
       dest.stream.getTracks().forEach(t => t.stop());
+      referenceDest?.stream.getTracks().forEach(t => t.stop());
       try { source.disconnect(); } catch { /* ignore */ }
+      try { referenceSource?.disconnect(); } catch { /* ignore */ }
       ctx.close().catch(() => {});
       input.getTracks().forEach(t => t.stop());
+      opts.reference?.getTracks().forEach(t => t.stop());
     },
   };
 };

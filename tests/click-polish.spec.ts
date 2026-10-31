@@ -6,6 +6,7 @@
  * Does not require a visual browser; documents any manual checklist gaps in comments.
  */
 import { test, expect, Page } from '@playwright/test';
+import type { RecordingEvent } from '../types';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -44,7 +45,7 @@ async function loadFixtureAsImport(page: Page, durationHint = 60, events: any[] 
   }, null, { timeout: 20000 });
 }
 
-const CLICKS = [
+const CLICKS: RecordingEvent[] = [
   { type: 'move', time: 1.9, x: 20, y: 25 },
   { type: 'click', time: 2.0, x: 20, y: 25 },
   { type: 'click', time: 2.5, x: 22, y: 27 },

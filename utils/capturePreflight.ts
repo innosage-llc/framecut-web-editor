@@ -15,7 +15,7 @@ import { dryRunRecorders } from './recorderWarmup';
 export type PreflightState = 'idle' | 'running' | 'done' | 'failed' | 'cancelled';
 
 let state: PreflightState = 'idle';
-let current: { abort: AbortController; tracks: MediaStreamTrack[] } | null = null;
+let current: { abort: AbortController; tracks: MediaStreamTrack[]; dispose: () => void } | null = null;
 
 const expose = () => {
   if ((window as any).__FRAMECUT_E2E_ENABLED__) (window as any).__FRAMECUT_PREFLIGHT__ = { state, tracks: current?.tracks ?? (window as any).__FRAMECUT_PREFLIGHT__?.tracks ?? [] };
@@ -39,10 +39,15 @@ export const runCapturePreflight = async (micStream: MediaStream): Promise<void>
   state = 'running';
   const abort = new AbortController();
   const tracks: MediaStreamTrack[] = [];
-  current = { abort, tracks };
-  expose();
   let mono: MonoMic | null = null;
   let video: { stream: MediaStream; stop: () => void } | null = null;
+  const dispose = () => {
+    video?.stop();
+    mono?.close();
+    tracks.forEach(t => { try { t.stop(); } catch { /* ignore */ } });
+  };
+  current = { abort, tracks, dispose };
+  expose();
   try {
     const input = micStream.clone();
     tracks.push(...input.getTracks());
@@ -57,13 +62,13 @@ export const runCapturePreflight = async (micStream: MediaStream): Promise<void>
     if (!abort.signal.aborted) state = 'done';
   } catch (e) {
     console.warn('Capture preflight failed; recording will start normally.', e);
-    if (state === 'running') state = 'failed';
+    if (current?.abort === abort && state === 'running') state = 'failed';
   } finally {
-    video?.stop();
-    mono?.close(); // stops the cloned input too
-    tracks.forEach(t => { try { t.stop(); } catch { /* ignore */ } });
-    if (current?.abort === abort) current = null;
-    (window as any).__FRAMECUT_E2E_ENABLED__ && ((window as any).__FRAMECUT_PREFLIGHT__ = { state, tracks });
+    dispose();
+    if (current?.abort === abort) {
+      current = null;
+      (window as any).__FRAMECUT_E2E_ENABLED__ && ((window as any).__FRAMECUT_PREFLIGHT__ = { state, tracks });
+    }
   }
 };
 
@@ -73,7 +78,8 @@ export const cancelCapturePreflight = () => {
   state = 'cancelled';
   current.abort.abort();
   abandonPendingWarmup();
-  current.tracks.forEach(t => { try { t.stop(); } catch { /* ignore */ } });
+  // Release the graph now, even when mono.ready is still waiting for its first sample.
+  current.dispose();
   expose();
 };
 
