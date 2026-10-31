@@ -944,10 +944,12 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           await syncScreenExportPlayback(sourceTime);
           return;
       }
-      if (resolveCameraAt(time)) {
+      if (resolveCameraAt(time) || exportPlaybackVideoRef.current?.paused) {
           // No decoder (no WebCodecs, or a non-WebM recording): a camera seek per frame is too slow
           // for the screen to keep playing in realtime (it ran ahead and froze, QA #49 B1), so hold
           // the screen and seek both to this frame exactly.
+          // Once paused, keep seeking even after the camera ends or the bubble is hidden;
+          // the playback synchronizer only waits for a running video and cannot advance it.
           // Both seeks run together; a paused element may not fire a frame callback, so the wait for
           // the presented frame is capped lower than the GIF path's.
           const screen = exportPlaybackVideoRef.current;
