@@ -38,6 +38,7 @@ interface TimelineProps {
   isAudioTrackMuted?: boolean;
   onToggleAudioTrackMute?: () => void;
   narration?: MediaAsset | null;
+  voiceover?: MediaAsset | null;
   narrationClips?: Clip[];
   mutedAudioRoles?: AudioRole[];
   onSetAudioRoleMuted?: (role: AudioRole, muted: boolean) => void;
@@ -104,6 +105,7 @@ const Timeline: React.FC<TimelineProps> = React.memo(({
   isAudioTrackMuted,
   onToggleAudioTrackMute,
   narration = null,
+  voiceover = null,
   narrationClips = [],
   mutedAudioRoles = [],
   onSetAudioRoleMuted,
@@ -374,6 +376,7 @@ const Timeline: React.FC<TimelineProps> = React.memo(({
             onToggleAudioTrackMute={onToggleAudioTrackMute}
             mutedAudioRoles={mutedAudioRoles}
             hasNarration={narrationClips.length > 0}
+            hasVoiceover={!!voiceover}
             onSetAudioRoleMuted={onSetAudioRoleMuted}
             subtitleTracks={subtitleTracks}
             spotlightTracks={spotlightTracks}
@@ -408,6 +411,7 @@ const Timeline: React.FC<TimelineProps> = React.memo(({
              outro={outro}
              mainVideo={mainVideo}
              audio={audio}
+             voiceover={voiceover}
              narration={narration}
              narrationClips={narrationClips}
              onToggleNarrationClipMute={onToggleNarrationClipMute}

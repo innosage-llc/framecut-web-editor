@@ -1,0 +1,23 @@
+FrameCut local AI voiceover third-party notices
+
+Kokoro.js 1.2.1: Apache License 2.0.
+Source: https://github.com/hexgrad/kokoro/tree/main/kokoro.js
+License: kokoro-js-LICENSE.txt
+
+Phonemizer.js 1.2.1 wrapper: Apache License 2.0 as declared by its package.
+Source and build scripts: https://github.com/xenova/phonemizer.js
+License: phonemizer-LICENSE.txt
+The wrapper embeds eSpeak NG; its upstream code is distributed under the GNU
+General Public License version 3 or later. The wrapper's package declaration does
+not replace the embedded component's license.
+eSpeak NG source: https://github.com/espeak-ng/espeak-ng
+License: espeak-ng-COPYING.txt
+
+Kokoro-82M-v1.0-ONNX model and predefined voices are downloaded separately from:
+https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX
+The model card declares Apache License 2.0. Consult its upstream notices.
+
+Transformers.js and ONNX Runtime are existing inference dependencies. Their
+source and licenses are available at:
+https://github.com/huggingface/transformers.js (Apache-2.0)
+https://github.com/microsoft/onnxruntime (MIT)

@@ -19,6 +19,9 @@ import { useExport } from './hooks/useExport';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSubtitleTools } from './hooks/useSubtitleTools';
 import SubtitleTools from './components/SubtitleTools';
+import { VoiceoverTools } from './components/VoiceoverTools';
+import { useVoiceoverTools } from './hooks/useVoiceoverTools';
+import { setVoiceoverGenerator, voiceoverSignature } from './utils/voiceover';
 import { setTranscriber, createWorkerTranscriber, createStubWorker, installDefaultTranscriber } from './utils/transcriber';
 import { createWhisperTranscriber, ortWasmAbsoluteUrl } from './utils/whisperTranscriber';
 import { chooseWhisperThreads, currentThreadEnv } from './utils/whisperThreads';
@@ -147,6 +150,7 @@ const App: React.FC = () => {
       }
   }, []);
 
+  const voiceoverTools = useVoiceoverTools({ setState, stateRef, pushHistory });
   const subtitleTools = useSubtitleTools({ setState, stateRef, pushHistory, recalculateDuration });
 
   useKeyboardShortcuts({ onDelete: handleDelete, onUndo: handleUndo, onRedo: handleRedo, onToggleDebug: handleToggleDebug, onAddZoom: handleAddZoomWrapper });
@@ -161,6 +165,7 @@ const App: React.FC = () => {
     if (!w.__FRAMECUT_E2E_ENABLED__) return;
     w.__FRAMECUT_E2E__ = {
       getSnapshot: () => ({
+        voiceover: state.voiceover,
         recordingEvents: state.recordingEvents,
         zoomEffects: state.zoomEffects.map(z => ({
           id: z.id,
@@ -260,6 +265,7 @@ const App: React.FC = () => {
       uploadMainAsset: (blob: Blob, name = 'replacement.webm') => handleUploadAsset('main', new File([blob], name, { type: blob.type || 'video/webm' })),
       generateAutoSpotlight: () => handleAutoSpotlight(stateRef.current.recordingEvents),
       /** #27 test seams: inject a transcriber (object or worker-backed), shorten the timeout, undo. */
+      setVoiceoverGenerator,
       setTranscriber,
       createWorkerTranscriber,
       createStubWorker,
@@ -275,7 +281,7 @@ const App: React.FC = () => {
       redo: () => handleRedo(),
     };
     return () => { delete w.__FRAMECUT_E2E__; };
-  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef, subtitleTools.setTimeoutMs, handleUndo, handleRedo, handleUpdateSubtitle, pushHistory, state.narration, state.narrationClips, state.mutedAudioRoles, state.isAudioTrackMuted, handleSplit, handleDelete, handleClipSpeedChange, handleUpdateClip, handleSetAudioRoleMuted, handleToggleNarrationClipMute, handleUpdateCameraBubble, state.camera]);
+  }, [state.recordingEvents, state.zoomEffects, state.spotlightEffects, state.clickRipplesEnabled, state.backgroundFrame, state.clips, handleAutoSpotlight, setState, recalculateDuration, handleSeek, state.autoZoomEnabled, state.duration, state.mainVideo, handleLoadProject, handleAutoZoom, handleRemoveAutoZooms, state.mosaicEffects, state.subtitles, handleUploadAsset, state.currentTime, handleUpdateProjectSettings, stateRef, subtitleTools.setTimeoutMs, handleUndo, handleRedo, handleUpdateSubtitle, pushHistory, state.narration, state.narrationClips, state.mutedAudioRoles, state.isAudioTrackMuted, handleSplit, handleDelete, handleClipSpeedChange, handleUpdateClip, handleSetAudioRoleMuted, handleToggleNarrationClipMute, handleUpdateCameraBubble, state.camera, state.voiceover]);
 
   const handleTogglePlay = useCallback(() => setState(prev => ({ ...prev, isPlaying: !prev.isPlaying })), [setState]);
   const handleSelect = useCallback((sel: any) => setState(prev => ({ ...prev, selection: sel })), [setState]);
@@ -395,6 +401,8 @@ const App: React.FC = () => {
                 isMuted={videoCtx.muted || mutedRoles.has('system')}
                 corsCompatible={videoCtx.corsCompatible}
                 audioSrc={audioCtx.src}
+                voiceoverSrc={state.voiceover?.src ?? null}
+                isVoiceoverMuted={mutedRoles.has('voiceover')}
                 narrationSrc={state.narration?.src ?? null}
                 narrationClips={state.narrationClips ?? []}
                 narrationTimeOffset={state.narration?.timeOffset ?? 0}
@@ -531,6 +539,8 @@ const App: React.FC = () => {
           showDebug={state.showDebug}
           onScreenshot={handleScreenshot}
           subtitleTools={
+            <div className="flex items-center gap-2">
+            <VoiceoverTools tools={voiceoverTools} hasSubtitles={state.subtitles.length > 0} hasVoiceover={!!state.voiceover} stale={!!state.voiceover && state.voiceover.signature !== voiceoverSignature(state.subtitles, state.duration)} disabled={state.isExporting || state.isExportingAudio} />
             <SubtitleTools
               hasVideo={!!state.mainVideo}
               hasSubtitles={state.subtitles.length > 0}
@@ -547,6 +557,7 @@ const App: React.FC = () => {
               onModelChange={subtitleTools.setModel}
               modelSizes={subtitleTools.modelSizes}
             />
+            </div>
           }
         />
 
@@ -582,6 +593,7 @@ const App: React.FC = () => {
             onInteractionStart={pushHistory}
             isAudioTrackMuted={mutedRoles.has('music')}
             onToggleAudioTrackMute={handleToggleAudioTrackMute}
+            voiceover={state.voiceover ?? null}
             narration={state.narration ?? null}
             narrationClips={state.narrationClips ?? []}
             mutedAudioRoles={[...mutedRoles]}

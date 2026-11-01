@@ -24,13 +24,14 @@ export default defineConfig(({ mode }) => {
       plugins: [react()],
       // gifenc is only imported from the GIF encoder worker; pre-bundle it so the dev server
       // doesn't discover it lazily and force a full page reload mid-session.
-      optimizeDeps: { include: ['gifenc'], exclude: ['@huggingface/transformers', 'onnxruntime-web'] },
+      optimizeDeps: { include: ['gifenc'], exclude: ['@huggingface/transformers', 'onnxruntime-web', 'kokoro-js', 'phonemizer'] },
       worker: { format: 'es' },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
       },
       resolve: {
+        dedupe: ['@huggingface/transformers'],
         alias: [
           { find: '@', replacement: path.resolve(__dirname, '.') },
           // #27: transformers.js imports the WebGPU build of ONNX Runtime, whose WASM (~28 MB) is over

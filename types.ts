@@ -40,7 +40,12 @@ export interface MediaAsset {
 }
 
 /** #28: audio lanes, matching the macOS app (A1 System Audio, A2 Narration, A3 Music). */
-export type AudioRole = 'system' | 'narration' | 'music';
+export type AudioRole = 'system' | 'narration' | 'music' | 'voiceover';
+
+export interface VoiceoverAsset extends MediaAsset {
+  signature: string;
+  voice: string;
+}
 
 export interface Subtitle {
   id: string;
@@ -154,6 +159,8 @@ export interface EditorState {
   audio: MediaAsset | null; // Background Audio Asset
   /** #28: microphone narration recorded with the screen (A2). */
   narration?: MediaAsset | null;
+  /** Locally generated WAV aligned to a subtitle snapshot, independent of recordings. */
+  voiceover?: VoiceoverAsset | null;
   /** #28: camera recorded with the screen. timeOffset = camera media 0 in screen-source seconds. */
   camera?: MediaAsset | null;
 

@@ -10,6 +10,7 @@ interface TimelineHeadersProps {
     /** #28 lane mutes (A1 System, A2 Narration). A3 Music is the existing audio-track mute. */
     mutedAudioRoles?: AudioRole[];
     hasNarration?: boolean;
+    hasVoiceover?: boolean;
     onSetAudioRoleMuted?: (role: AudioRole, muted: boolean) => void;
     subtitleTracks: Subtitle[][];
     spotlightTracks: SpotlightEffect[][];
@@ -26,6 +27,7 @@ const TimelineHeaders = memo(forwardRef<HTMLDivElement, TimelineHeadersProps>(({
     onToggleAudioTrackMute,
     mutedAudioRoles = [],
     hasNarration = false,
+    hasVoiceover = false,
     onSetAudioRoleMuted,
     subtitleTracks,
     spotlightTracks,
@@ -92,6 +94,10 @@ const TimelineHeaders = memo(forwardRef<HTMLDivElement, TimelineHeadersProps>(({
                     {isAudioTrackMuted ? <VolumeX size={14} className="text-red-500" /> : <Volume2 size={14} className="text-orange-500" />}
                     A3
                 </button>
+
+                {hasVoiceover && <button type="button" title={mutedAudioRoles.includes('voiceover') ? 'Unmute AI voiceover (A4)' : 'Mute AI voiceover (A4)'} aria-pressed={mutedAudioRoles.includes('voiceover')} data-testid="lane-mute-voiceover" onClick={() => onSetAudioRoleMuted?.('voiceover', !mutedAudioRoles.includes('voiceover'))} className="h-10 w-full flex flex-col items-center justify-center text-[8px] text-sky-400 bg-zinc-900/50 hover:bg-zinc-800">
+                    {mutedAudioRoles.includes('voiceover') ? <VolumeX size={14} /> : <Volume2 size={14} />} A4
+                </button>}
 
                 {/* Subtitle Tracks (Dynamic) */}
                 {subtitleTracks.map((_, index) => (

@@ -125,6 +125,16 @@ export const renderProjectAudio = async (state: EditorState, sampleRate = 44100)
         }
     }
 
+    // Generated voiceover is a timeline-aligned WAV with silence between subtitle cues.
+    if (state.voiceover && !mutedRoles.has('voiceover')) {
+        const decoded = await decodeAsset(state.voiceover, ctx);
+        if (!decoded) throw new Error('Could not load the voiceover audio. Regenerate it or remove the voiceover before exporting.');
+        const source = ctx.createBufferSource();
+        source.buffer = decoded;
+        source.connect(ctx.destination);
+        source.start(0, 0, Math.min(duration, decoded.duration));
+    }
+
     // 6. Render
     try {
         const renderedBuffer = await ctx.startRendering();
