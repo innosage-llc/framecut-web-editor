@@ -206,7 +206,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
           <button onClick={() => onZoom(1)} className="p-1.5 hover:bg-zinc-800 text-zinc-400"><ZoomIn size={16} /></button>
         </div>
         <div className="flex items-center pl-2 border-l border-zinc-800">
-          <button onClick={onToggleDebug} className={`p-1.5 rounded-md ${showDebug ? 'bg-green-900/30 text-green-400' : 'text-zinc-400 hover:bg-zinc-800'}`}><Activity size={16} /></button>
+          <button title="Toggle Performance Debug (D)" aria-label="Toggle Performance Debug (D)" onClick={onToggleDebug} className={`p-1.5 rounded-md ${showDebug ? 'bg-green-900/30 text-green-400' : 'text-zinc-400 hover:bg-zinc-800'}`}><Activity size={16} /></button>
         </div>
       </div>
     </div>

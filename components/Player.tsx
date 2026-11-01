@@ -1082,7 +1082,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           onPreviewHover(sourceX, sourceY);
       }
       if (selectedMosaicEffect && selectedMosaicEffectRef.current?.id === selectedMosaicEffect.id && !isPlaying && selectedMosaicEffect.mode !== 'box') {
-          handleMosaicMouseDown(e);
+          handleMosaicMouseMove(e);
       }
   };
 
@@ -1109,10 +1109,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
         return;
     }
 
-    const subtitlesToRender = resolveActiveItems(subtitleCursorRef.current, currentGlobalTime);
-    const activeZooms = resolveActiveItems(zoomCursorRef.current, currentGlobalTime);
-    const activeSpotlights = resolveActiveItems(spotlightCursorRef.current, currentGlobalTime);
-    const activeMosaics = resolveActiveItems(mosaicCursorRef.current, currentGlobalTime);
+    const subtitlesToRender = resolveActiveItems<Subtitle>(subtitleCursorRef.current, currentGlobalTime);
+    const activeZooms = resolveActiveItems<ZoomEffect>(zoomCursorRef.current, currentGlobalTime);
+    const activeSpotlights = resolveActiveItems<SpotlightEffect>(spotlightCursorRef.current, currentGlobalTime);
+    const activeMosaics = resolveActiveItems<MosaicEffect>(mosaicCursorRef.current, currentGlobalTime);
     const zoom = activeZooms[activeZooms.length - 1];
     const spotlight = activeSpotlights[activeSpotlights.length - 1];
     const mosaic = activeMosaics[activeMosaics.length - 1];
@@ -1490,7 +1490,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
         className="relative shadow-2xl overflow-visible rounded-lg" 
         style={{ aspectRatio, maxWidth: '100%', maxHeight: '100%', backgroundColor: canvasBackgroundColor }} 
         onMouseDown={selectedMosaicEffect && selectedMosaicEffect.mode !== 'box' && !isPlaying ? (e) => handleMosaicMouseDown(e, null) : (e) => e.target === canvasRef.current && onSelectSubtitle(null)} 
-        onMouseMove={handleContainerMouseMove} 
+        onMouseMove={handleContainerMouseMove}
+        onMouseUp={handleMosaicMouseUp}
         onMouseLeave={onPreviewLeave}
       >
         {!isExporting && !isPlaying && (

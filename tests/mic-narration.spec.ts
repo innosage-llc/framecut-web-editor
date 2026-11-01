@@ -90,7 +90,7 @@ test.describe('linked recording clips (unit)', () => {
       const C = await import('/utils/captureClock.ts');
       // @ts-ignore
       const A = await import('/utils/audioLanes.ts');
-      const clip = { id: 'n', sourceStart: 0, sourceEnd: 10, offset: 0, speed: 1, mediaType: 'narration' };
+      const clip = { id: 'n', sourceStart: 0, sourceEnd: 10, offset: 0, speed: 1, mediaType: 'narration' as const };
       return {
         // start events lagging by encoder latency (< LATE_START_S) don't move media time 0
         encoderLag: C.companionTimeOffset({ requestedOffset: 0, startOffset: 0.1, stopOffset: 5 }, { requestedOffset: 0.02, startOffset: 0.15, stopOffset: 5 }),
@@ -101,7 +101,7 @@ test.describe('linked recording clips (unit)', () => {
         winTrim: A.narrationWindow({ ...clip, sourceStart: 1, offset: 3, speed: 2 }, 0.25, 6),
         winEarly: A.narrationWindow(clip, -0.5),
         silent: A.narrationWindow({ ...clip, sourceEnd: 0.2 }, 0.25),
-        roles: ['main', 'intro', 'audio', 'narration'].map(m => A.audioRoleOf({ mediaType: m })),
+        roles: (['main', 'intro', 'audio', 'narration'] as const).map(m => A.audioRoleOf({ mediaType: m })),
       };
     });
     expect(r.encoderLag).toBeCloseTo(0.02, 6);
@@ -443,11 +443,14 @@ test.describe('QA warnings', () => {
       const gum = md.getUserMedia.bind(md);
       (window as any).__micStreams = [];
       md.getUserMedia = async (c: any) => { const s = await gum(c); if (c?.audio) (window as any).__micStreams.push(s); return s; };
+      const screens = new WeakSet<MediaStream>();
+      const gdm = md.getDisplayMedia.bind(md);
+      md.getDisplayMedia = async c => { const stream = await gdm(c); screens.add(stream); return stream; };
       const Orig = window.MediaRecorder;
       let fail = true;
       (window as any).MediaRecorder = class extends Orig {
         // Fail the screen recorder (the mic path also runs a throwaway encoder warm-up recorder).
-        start(t?: number) { if (fail && this.stream.getVideoTracks().length) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
+        start(t?: number) { if (fail && screens.has(this.stream)) { fail = false; throw new DOMException('E2E: start failed', 'InvalidStateError'); } return super.start(t); }
       };
       const AC = window.AudioContext;
       (window as any).__contexts = [];

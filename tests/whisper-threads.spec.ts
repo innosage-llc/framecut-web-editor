@@ -61,7 +61,9 @@ test.describe('in the browser', () => {
     await page.addInitScript(() => { (window as any).__FRAMECUT_E2E_ENABLED__ = true; });
   });
 
-  test('isolated page: headers served, SharedArrayBuffer available, Tailwind + Inter still load', async ({ page }) => {
+  test('isolated page: headers served, SharedArrayBuffer available, local styles and fonts load offline', async ({ page }) => {
+    const remoteAssets: string[] = [];
+    await page.route('https://**/*', route => { remoteAssets.push(route.request().url()); return route.abort(); });
     const res = await page.goto('/');
     expect(res!.headers()['cross-origin-opener-policy']).toBe('same-origin');
     expect(res!.headers()['cross-origin-embedder-policy']).toBe('credentialless');
@@ -78,8 +80,9 @@ test.describe('in the browser', () => {
     expect(env.isolated).toBe(true);
     expect(env.sab).toBe(true);
     expect(env.threads).toBe(chooseWhisperThreads({ isolated: true, sharedArrayBuffer: true, hardwareConcurrency: env.cores, deviceMemory: env.mem, firefox: isFirefoxUA(env.ua) }));
-    expect(env.display).toBe('flex'); // cdn.tailwindcss.com ran under COEP credentialless
-    expect(env.inter).toBeGreaterThan(0); // fonts.gstatic.com Inter face loaded
+    expect(env.display).toBe('flex'); // compiled local Tailwind styles
+    expect(env.inter).toBeGreaterThan(0); // bundled Inter face loaded
+    expect(remoteAssets).toEqual([]);
   });
 
   test('fallback: without the headers the page is not isolated and Whisper uses 1 thread', async ({ page }) => {

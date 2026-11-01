@@ -241,18 +241,24 @@ export const useScreenRecorder = ({ onRecordingComplete, onNotice }: UseScreenRe
       if (micStream) {
         const micTrack = micStream.getAudioTracks()[0];
         const device = micTrack?.getSettings?.() ?? {};
-        let mono = createMonoMicStream(micStream);
+        const screenAudio = stream.getAudioTracks();
+        const reference = screenAudio.length ? new MediaStream(screenAudio) : undefined;
+        let mono = createMonoMicStream(micStream, { reference });
         monoMicRef.current = mono;
         // Start recording only once mono samples flow (media time 0 = start()).
         if (mono) await mono.ready;
         // A graph built in a cold renderer keeps extra input latency; build a fresh one, now warm.
         if (mono?.coldStart()) {
           mono.release();
-          mono = createMonoMicStream(micStream, { rewarm: true });
+          mono = createMonoMicStream(micStream, { rewarm: true, reference });
           monoMicRef.current = mono;
           if (mono) await mono.ready;
         }
         micFlowingRef.current = !!mono?.flowing();
+        if (mono?.referenceStream) {
+          screenAudio.forEach(track => stream!.removeTrack(track));
+          mono.referenceStream.getAudioTracks().forEach(track => stream!.addTrack(track));
+        }
         micSettingsRef.current = {
           sampleRate: mono?.sampleRate ?? (device.sampleRate as number),
           channelCount: mono?.channelCount ?? (device.channelCount as number),

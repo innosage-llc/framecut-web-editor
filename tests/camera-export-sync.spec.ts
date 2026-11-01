@@ -1,14 +1,12 @@
 import { test, expect, type TestInfo } from '@playwright/test';
 import fs from 'fs';
-import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { boot, callApi, loadWithCamera, applyLinkedEdits, noAacShim, exportGif, exportMp4, decodeGifFrames, SCREEN_FI, CAMERA_FI } from './helpers/cameraBubbleHelpers';
 
 // #28 PR-C: the camera bubble stays within one frame of the screen across the whole MP4 export
-// (play-along camera), and the GIF (exact per-frame seeks) is pixel-identical to the 9e9f0b2 baseline.
+// and GIF export after linked edits. Decode the fixture markers rather than comparing platform-specific raster hashes.
 // Fixtures carry their frame index as 9 black/white blocks (scripts/make-frame-index-fixtures.py).
 
-const BASELINE = 'tests/fixtures/camera-gif-baseline-9e9f0b2.json';
 const W = 640, H = 360, FPS = 30;
 // Screen bits: 40 px blocks at (20 + 44b, 20) in the 640x360 source. Camera bits: 3x3 grid of 40 px cells at (100, 60) in
 // the 320x240 camera, cover-fit into the default bubble (108 px at 460.8, 234; scale 0.45, crop x 40).
@@ -85,20 +83,29 @@ test('MP4 without a camera bubble: screen frame-exact at split/speed/trim points
   await checkMp4(page, testInfo, { noCamera: true });
 });
 
-test('GIF is pixel-identical to the 9e9f0b2 baseline (same project)', async ({ page }, testInfo) => {
+test('GIF keeps screen and camera frame indices aligned after split, speed and trim', async ({ page }, testInfo) => {
   test.setTimeout(300_000);
-  await project(page);
-  const { path, seconds } = await exportGif(page);
+  const clips = await project(page);
+  const { path } = await exportGif(page);
+  fs.copyFileSync(path, testInfo.outputPath('camera-sync.gif'));
   const gif = await decodeGifFrames(page, fs.readFileSync(path));
-  const hashes = gif.frames.map(f => crypto.createHash('sha256').update(Buffer.from(f, 'base64')).digest('hex'));
-  const result = { exportSeconds: seconds, count: gif.count, w: gif.w, h: gif.h, hashes };
-  if (process.env.CAPTURE_GIF_BASELINE) {
-    fs.writeFileSync(BASELINE, JSON.stringify({ commit: '9e9f0b2', count: gif.count, w: gif.w, h: gif.h, hashes }, null, 1) + '\n');
-    fs.copyFileSync(path, testInfo.outputPath('prc-gif-baseline-9e9f0b2.gif'));
+  const duration = Math.max(...clips.map((c: any) => c.offset + (c.sourceEnd - c.sourceStart) / c.speed));
+  expect([gif.count, gif.w, gif.h]).toEqual([Math.ceil(duration * 10), 480, 270]);
+  const read = (frame: Buffer, points: number[][]) => points.reduce((value, [x, y], bit) => {
+    const offset = (Math.round(y * gif.h / H) * gif.w + Math.round(x * gif.w / W)) * 4;
+    const luminance = (frame[offset] + frame[offset + 1] + frame[offset + 2]) / 3;
+    return value | (luminance > 128 ? 1 << bit : 0);
+  }, 0);
+  // Whole-frame hashes vary with browser rasterization and GIF palettes. The binary fixture markers
+  // still verify every exported frame's source time and the bubble's placement, without a new baseline.
+  for (let i = 0; i < gif.count; i++) {
+    const time = i / 10;
+    const clip = clips.find((c: any) => time >= c.offset && time < c.offset + (c.sourceEnd - c.sourceStart) / c.speed);
+    expect(clip, `GIF frame ${i} must have a screen clip`).toBeTruthy();
+    const expected = Math.round((clip.sourceStart + (time - clip.offset) * clip.speed) * FPS);
+    const frame = Buffer.from(gif.frames[i], 'base64');
+    const screen = read(frame, SCREEN_BITS), camera = read(frame, CAMERA_BITS);
+    expect(Math.abs(screen - expected), `GIF frame ${i}: screen ${screen}, expected ${expected}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(camera - expected), `GIF frame ${i}: camera ${camera}, expected ${expected}`).toBeLessThanOrEqual(1);
   }
-  fs.writeFileSync(testInfo.outputPath('prc-gif-current.json'), JSON.stringify(result, null, 1));
-  const base = JSON.parse(fs.readFileSync(BASELINE, 'utf8'));
-  expect([gif.count, gif.w, gif.h]).toEqual([base.count, base.w, base.h]);
-  const diff = hashes.map((h, i) => (h === base.hashes[i] ? -1 : i)).filter(i => i >= 0);
-  expect(diff, `frames differing from baseline: ${diff.join(',')}`).toEqual([]);
 });

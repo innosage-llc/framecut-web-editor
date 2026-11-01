@@ -1,10 +1,10 @@
 import { test, expect, Page } from '@playwright/test';
 import fs from 'fs';
+import { installSharedCaptureAudio } from './helpers/sharedCaptureAudio';
 
 // #28 QA (PR-B sync WARN): narration vs screen audio alignment over repeated sessions.
-// Chromium's fake mic and fake display audio emit beeps from the same generator clock, so a beep's
-// onset in the narration (placed at its measured timeOffset) must match the same beep in the
-// screen recording's own audio track.
+// Feed both captures from the same PCM clock, then compare decoded beeps after the real
+// MediaRecorder and mono-mic paths. Independent browser fake-device clocks are not synchronized.
 
 const SESSIONS = Number(process.env.SYNC_SESSIONS || 6);
 const TOL_MS = 20;
@@ -31,11 +31,12 @@ const onsetsIn = (page: Page, which: 'micBlob' | 'screenBlob') => page.evaluate(
     if (!on && env[k] > thr) { on = true; out.push((k * win) / sr); }
     else if (on && env[k] < thr * 0.3) on = false;
   }
-  return out;
+  return { onsets: out, channels: buf.numberOfChannels };
 }, which);
 
 test(`narration lands within ${TOL_MS} ms of the screen audio in every one of ${SESSIONS} sessions`, async ({ page }) => {
   test.setTimeout(60_000 + SESSIONS * 20_000);
+  await page.addInitScript(installSharedCaptureAudio);
   const errs: number[] = [];
   const rows: any[] = [];
   for (let i = 0; i < SESSIONS; i++) {
@@ -51,9 +52,12 @@ test(`narration lands within ${TOL_MS} ms of the screen audio in every one of ${
     await page.waitForTimeout(2600 + (i % 3) * 300);
     await page.getByRole('button', { name: 'Stop Sharing' }).click();
     await page.waitForFunction(() => (window as any).__FRAMECUT_LAST_CAPTURE__?.micBlob, null, { timeout: 15000 });
-    const cap = await page.evaluate(() => { const c = (window as any).__FRAMECUT_LAST_CAPTURE__; return { sources: c.sources, narrationTimeOffset: c.narrationTimeOffset }; });
-    const screenOn = await onsetsIn(page, 'screenBlob');
-    const micOn = await onsetsIn(page, 'micBlob');
+    const cap = await page.evaluate(() => { const c = (window as any).__FRAMECUT_LAST_CAPTURE__; return { sources: c.sources, narrationTimeOffset: c.narrationTimeOffset, anchors: c.anchors, screenAudioLead: c.screenAudioLead, micSettings: c.micSettings }; });
+    const screenAudio = await onsetsIn(page, 'screenBlob');
+    const micAudio = await onsetsIn(page, 'micBlob');
+    expect(screenAudio.channels).toBe(2); // shared processing must preserve system stereo
+    expect(micAudio.channels).toBe(1);
+    const screenOn = screenAudio.onsets, micOn = micAudio.onsets;
     // Each narration beep, on the screen timeline, against the nearest screen-audio beep.
     const pairs = micOn.map(m => m + cap.narrationTimeOffset).map(t => {
       const near = screenOn.reduce((a, b) => (Math.abs(b - t) < Math.abs(a - t) ? b : a), Infinity);
@@ -67,7 +71,7 @@ test(`narration lands within ${TOL_MS} ms of the screen audio in every one of ${
     expect(pairs.length, `session ${i}: only ${pairs.length} of ${inside.length} narration beeps matched (screen ${screenOn}, mic ${micOn})`).toBeGreaterThanOrEqual(inside.length);
     const err = pairs.reduce((a, b) => a + b, 0) / pairs.length;
     errs.push(err);
-    rows.push({ session: i, errMs: +err.toFixed(1), beeps: pairs.length, narrationTimeOffset: cap.narrationTimeOffset, sources: cap.sources });
+    rows.push({ session: i, errMs: +err.toFixed(1), beeps: pairs.length, narrationTimeOffset: cap.narrationTimeOffset, sources: cap.sources, anchors: cap.anchors, screenAudioLead: cap.screenAudioLead, micSettings: cap.micSettings, screenOn, micOn });
   }
   const abs = errs.map(Math.abs);
   const stats = { sessions: SESSIONS, meanMs: +(errs.reduce((a, b) => a + b, 0) / errs.length).toFixed(1), meanAbsMs: +(abs.reduce((a, b) => a + b, 0) / abs.length).toFixed(1), maxAbsMs: +Math.max(...abs).toFixed(1) };
