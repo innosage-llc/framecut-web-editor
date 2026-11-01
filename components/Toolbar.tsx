@@ -64,8 +64,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
   const isCropActive = selection?.type === 'crop';
 
   return (
-    <div className="h-12 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 relative">
-      <div className="flex items-center space-x-1 pr-4 z-10">
+    <div data-testid="editor-toolbar" className="bg-zinc-900 border-b border-zinc-800 shrink-0 relative">
+      <div data-testid="editing-tools" className="flex flex-wrap items-center gap-1 px-4 py-2">
         <button onClick={onSplit} className="p-1.5 hover:bg-zinc-800 rounded-md text-zinc-400 hover:text-white disabled:opacity-30" disabled={!hasVideo || !selection || (selection.type !== 'clip' && selection.type !== 'audio')} title="Split Clip"><Scissors size={16} /></button>
         <button 
             onClick={onCrop} 
@@ -191,22 +191,24 @@ const Toolbar: React.FC<ToolbarProps> = ({
         <button onClick={onScreenshot} className="p-1.5 hover:bg-zinc-800 rounded-md text-zinc-400 hover:text-white disabled:opacity-30" disabled={!hasVideo} title="Take Screenshot"><Camera size={16} /></button>
       </div>
 
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-4 z-0">
-        <div className="flex items-center gap-2">
-          <button onClick={() => onStepFrame(-1)} className="p-1 hover:bg-zinc-800 rounded-full text-zinc-400 disabled:opacity-30" disabled={!hasVideo}><ChevronLeft size={16} /></button>
-          <button onClick={onPlayPause} className="w-8 h-8 flex items-center justify-center bg-white text-black rounded-full hover:bg-zinc-200 shadow-lg disabled:opacity-30" disabled={!hasVideo}>{isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5"/>}</button>
-          <button onClick={() => onStepFrame(1)} className="p-1 hover:bg-zinc-800 rounded-full text-zinc-400 disabled:opacity-30" disabled={!hasVideo}><ChevronRight size={16} /></button>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center h-12 px-4 border-t border-zinc-800">
+        <div data-testid="playback-controls" className="col-start-2 flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <button onClick={() => onStepFrame(-1)} aria-label="Previous frame" className="p-1 hover:bg-zinc-800 rounded-full text-zinc-400 disabled:opacity-30" disabled={!hasVideo}><ChevronLeft size={16} /></button>
+            <button onClick={onPlayPause} aria-label={isPlaying ? 'Pause' : 'Play'} className="w-8 h-8 flex items-center justify-center bg-white text-black rounded-full hover:bg-zinc-200 shadow-lg disabled:opacity-30" disabled={!hasVideo}>{isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5"/>}</button>
+            <button onClick={() => onStepFrame(1)} aria-label="Next frame" className="p-1 hover:bg-zinc-800 rounded-full text-zinc-400 disabled:opacity-30" disabled={!hasVideo}><ChevronRight size={16} /></button>
+          </div>
+          <TimecodeDisplay refSource={currentTimeRef} isPlaying={isPlaying} />
         </div>
-        <TimecodeDisplay refSource={currentTimeRef} isPlaying={isPlaying} />
-      </div>
 
-      <div className="flex items-center space-x-4 z-10">
-        <div className="flex items-center space-x-1 pl-2 border-l border-zinc-800">
-          <button onClick={() => onZoom(-1)} className="p-1.5 hover:bg-zinc-800 text-zinc-400"><ZoomOut size={16} /></button>
-          <button onClick={() => onZoom(1)} className="p-1.5 hover:bg-zinc-800 text-zinc-400"><ZoomIn size={16} /></button>
-        </div>
-        <div className="flex items-center pl-2 border-l border-zinc-800">
-          <button title="Toggle Performance Debug (D)" aria-label="Toggle Performance Debug (D)" onClick={onToggleDebug} className={`p-1.5 rounded-md ${showDebug ? 'bg-green-900/30 text-green-400' : 'text-zinc-400 hover:bg-zinc-800'}`}><Activity size={16} /></button>
+        <div className="col-start-3 flex items-center gap-4 justify-self-end">
+          <div className="flex items-center space-x-1 pl-2 border-l border-zinc-800">
+            <button onClick={() => onZoom(-1)} className="p-1.5 hover:bg-zinc-800 text-zinc-400"><ZoomOut size={16} /></button>
+            <button onClick={() => onZoom(1)} className="p-1.5 hover:bg-zinc-800 text-zinc-400"><ZoomIn size={16} /></button>
+          </div>
+          <div className="flex items-center pl-2 border-l border-zinc-800">
+            <button title="Toggle Performance Debug (D)" aria-label="Toggle Performance Debug (D)" onClick={onToggleDebug} className={`p-1.5 rounded-md ${showDebug ? 'bg-green-900/30 text-green-400' : 'text-zinc-400 hover:bg-zinc-800'}`}><Activity size={16} /></button>
+          </div>
         </div>
       </div>
     </div>
