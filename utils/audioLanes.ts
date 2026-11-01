@@ -5,6 +5,7 @@ export const AUDIO_LANES: { role: AudioRole; label: string; title: string }[] = 
   { role: 'system', label: 'A1', title: 'System Audio' },
   { role: 'narration', label: 'A2', title: 'Narration' },
   { role: 'music', label: 'A3', title: 'Music' },
+  { role: 'voiceover', label: 'A4', title: 'AI Voiceover' },
 ];
 
 export const audioRoleOf = (clip: Pick<Clip, 'mediaType'>): AudioRole =>

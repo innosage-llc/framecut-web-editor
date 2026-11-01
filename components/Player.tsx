@@ -91,6 +91,8 @@ interface PlayerProps {
   audioPlaybackRate: number;
   /** #28: microphone narration (A2), played in sync with the linked screen clips. */
   narrationSrc?: string | null;
+  voiceoverSrc?: string | null;
+  isVoiceoverMuted?: boolean;
   narrationClips?: Clip[];
   narrationTimeOffset?: number;
   /** #28: camera recorded with the screen, drawn as a bubble on the screen clips that carry one. */
@@ -168,6 +170,8 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   corsCompatible = true,
   audioSrc,
   narrationSrc = null,
+  voiceoverSrc = null,
+  isVoiceoverMuted = false,
   narrationClips = [],
   narrationTimeOffset = 0,
   cameraSrc = null,
@@ -287,6 +291,9 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const activeClipsRef = useRef(activeClips);
   const audioClipsRef = useRef(audioClips);
   const narrationRef = useRef<HTMLAudioElement>(null);
+  const voiceoverRef = useRef<HTMLAudioElement>(null);
+  const voiceoverMutedRef = useRef(isVoiceoverMuted);
+  voiceoverMutedRef.current = isVoiceoverMuted;
   const narrationClipsRef = useRef<Clip[]>([]);
   const narrationTimeOffsetRef = useRef(narrationTimeOffset);
   narrationTimeOffsetRef.current = narrationTimeOffset;
@@ -328,10 +335,10 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   
   useEffect(() => {
     isPlayingRef.current = isPlaying;
-    if (!isPlaying) narrationRef.current?.pause();
+    if (!isPlaying) { narrationRef.current?.pause(); voiceoverRef.current?.pause(); }
   }, [isPlaying]);
   useEffect(() => { coverImageRef.current = coverImage; }, [coverImage]);
-  useEffect(() => { isExportingRef.current = isExporting; }, [isExporting]);
+  useEffect(() => { isExportingRef.current = isExporting; if (isExporting) voiceoverRef.current?.pause(); }, [isExporting]);
   useEffect(() => { activeClipIdRef.current = activeClipId; }, [activeClipId]);
   useEffect(() => { isEditingCropRef.current = isEditingCrop; }, [isEditingCrop]);
   useEffect(() => { canvasBackgroundColorRef.current = canvasBackgroundColor; }, [canvasBackgroundColor]);
@@ -723,6 +730,17 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
           } else {
               if (!audioEl.paused) audioEl.pause();
           }
+      }
+
+      const voiceoverEl = voiceoverRef.current;
+      if (voiceoverEl?.getAttribute('src')) {
+          voiceoverEl.muted = voiceoverMutedRef.current;
+          voiceoverEl.playbackRate = playbackRateRef.current;
+          if (time < voiceoverEl.duration && voiceoverEl.readyState >= 1) {
+              if (Math.abs(voiceoverEl.currentTime - time) > (isPlayingRef.current ? 0.15 : 0.02) && !voiceoverEl.seeking) voiceoverEl.currentTime = time;
+              if (isPlayingRef.current && voiceoverEl.paused && voiceoverEl.readyState >= 2) voiceoverEl.play().catch(() => {});
+              else if (!isPlayingRef.current) voiceoverEl.pause();
+          } else voiceoverEl.pause();
       }
 
       // #28: narration (A2). Clip times are screen-source times; media = source - timeOffset.
@@ -1269,7 +1287,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
   const renderFrameNow = (mode?: 'preview' | 'export') => renderFrame(mode ?? (isExportingRef.current ? 'export' : 'preview'));
   // isExportingRef is otherwise only updated in an effect after React commits `isExporting`; export
   // loops start in the same tick, so they must flip it synchronously (GIF first-frame-only bug).
-  const beginExport = () => { isExportingRef.current = true; };
+  const beginExport = () => { isExportingRef.current = true; voiceoverRef.current?.pause(); };
   const endExport = () => { isExportingRef.current = isExporting; };
   const getCanvas = () => {
       if ((exportCanvasRef.current.width === 0 || exportCanvasRef.current.height === 0) && sourceDimensionsRef.current.width > 0 && sourceDimensionsRef.current.height > 0) {
@@ -1483,6 +1501,7 @@ const Player = memo(forwardRef<PlayerRef, PlayerProps>(({
       {outroSrc && !outroSrc.startsWith('color:') && !outroSrc.startsWith('image:') && <video ref={outroVideoRef} src={outroSrc} className="hidden" onLoadedMetadata={handleLoadedMetadata} playsInline muted={isMuted} crossOrigin="anonymous" />}
       <audio ref={audioRef} src={audioSrc || undefined} className="hidden" crossOrigin="anonymous" />
       {cameraSrc && <video ref={cameraVideoRef} src={cameraSrc} className="hidden" playsInline muted preload="auto" data-testid="camera-video" />}
+      <audio ref={voiceoverRef} src={voiceoverSrc || undefined} muted={isVoiceoverMuted} className="hidden" preload="auto" data-testid="voiceover-audio" />
       <audio ref={narrationRef} src={narrationSrc || undefined} className="hidden" preload="auto" data-testid="narration-audio" />
 
       <div 

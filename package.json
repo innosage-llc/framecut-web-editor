@@ -18,6 +18,7 @@
     "@huggingface/transformers": "^4.3.2",
     "gifenc": "^1.0.3",
     "jszip": "^3.10.1",
+    "kokoro-js": "^1.2.1",
     "lucide-react": "^0.555.0",
     "mp4-muxer": "^5.2.2",
     "react": "^19.2.0",
@@ -33,5 +34,10 @@
     "tailwindcss": "^3.4.19",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
+  },
+  "overrides": {
+    "kokoro-js": {
+      "@huggingface/transformers": "$@huggingface/transformers"
+    }
   }
 }

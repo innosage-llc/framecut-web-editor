@@ -24,6 +24,7 @@ interface TracksLayerProps {
     mainVideo: MediaAsset | null;
     audio: MediaAsset | null;
     narration?: MediaAsset | null;
+    voiceover?: MediaAsset | null;
     narrationClips?: Clip[];
     onToggleNarrationClipMute?: (id: string) => void;
     onSelect: (selection: Selection) => void;
@@ -36,7 +37,7 @@ interface TracksLayerProps {
 const TracksLayer: React.FC<TracksLayerProps> = memo(({ 
     isEmpty, totalWidth, ticks, zoomLevel, 
     clips, audioClips, subtitleTracks, zoomEffects, spotlightTracks, mosaicTracks, 
-    selection, intro, outro, mainVideo, audio, narration = null, narrationClips = [], onToggleNarrationClipMute,
+    selection, intro, outro, mainVideo, audio, voiceover = null, narration = null, narrationClips = [], onToggleNarrationClipMute,
     onSelect, onSeek, onInteractionStart, 
     setDragState, handleSeek
 }) => {
@@ -85,6 +86,10 @@ const TracksLayer: React.FC<TracksLayerProps> = memo(({
                 onSelect={onSelect} onInteractionStart={onInteractionStart}
                 handleSeek={handleSeek} setDragState={setDragState} onSeek={onSeek}
             />
+
+            {voiceover && <div className="h-10 relative bg-zinc-950/40" data-testid="voiceover-track" title="AI voiceover · regenerate after subtitle or video timing edits">
+                <div className="absolute inset-y-1 left-0 rounded bg-sky-900/80 border border-sky-600 text-xs text-sky-100 px-2 overflow-hidden whitespace-nowrap" style={{ width: voiceover.duration * zoomLevel }}>AI voiceover</div>
+            </div>}
 
             {/* Subtitle Tracks */}
             {subtitleTracks.map((track: Subtitle[], trackIndex: number) => (
