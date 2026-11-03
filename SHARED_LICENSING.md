@@ -9,7 +9,7 @@ Preview: https://licensing-staging.framecut-web-editor.pages.dev
 1. Open **Account**, enter the purchase email, and request an eight-digit sign-in code.
 2. Verify the emailed code. No password is stored or requested.
 3. Redeem the existing FrameCut key once. The verified account email must match the license purchase email. Returning sign-ins restore linked licenses without re-entering keys.
-4. Active Pro removes export watermarks and enables 1080p/4K MP4 and longer GIFs, subject to browser resource limits. Free editing/import remain available without sign-in; Free exports are watermarked 720p MP4 or GIFs up to 15 seconds and 720px on the longest side.
+4. Active Pro removes export watermarks and enables 1080p/4K MP4 and longer GIFs, subject to browser resource limits. PNG screenshots use the same Free watermark/720p policy; Pro retains preview dimensions, and project cover thumbnails remain unchanged. Free editing/import remain available without sign-in; Free exports are watermarked 720p MP4 or GIFs up to 15 seconds and 720px on the longest side.
 5. **Manage Stripe billing** opens a short-lived customer portal for the selected owned license. Customers can update payment methods, view invoices, and cancel subscriptions at the paid period end. Refund requests and email changes remain support operations.
 
 The one-time purchase grants ongoing web Pro independently of the Mac update-coverage year. Subscription access follows the paid-through cutoff. Refunds/revocation are read from the same license record as the Mac client. Returning from Checkout or billing never grants Pro by itself.

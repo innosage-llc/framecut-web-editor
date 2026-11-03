@@ -24,3 +24,14 @@ export function drawExportWatermark(context: CanvasRenderingContext2D, mark: HTM
   context.drawImage(mark, Math.max(margin, context.canvas.width - mark.width - margin), context.canvas.height - mark.height - margin);
   context.restore();
 }
+
+export function screenshotCanvas(source: HTMLCanvasElement, pro: boolean): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  const size = pro ? source : outputSize(source.width, source.height, false);
+  canvas.width = size.width; canvas.height = size.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not prepare screenshot');
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  if (!pro) drawExportWatermark(context, watermarkCanvas(canvas.width, canvas.height));
+  return canvas;
+}

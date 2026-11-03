@@ -100,7 +100,7 @@ const App: React.FC = () => {
   }, [pushHistory, setState]);
   const mutedRoles = effectiveMutedRoles(state);
   
-  const { handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
+  const { handleScreenshot, handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
 
   // Export settings dialog (aspect-ratio presets + MP4/WebM/GIF)
   const [exportSettingsFormat, setExportSettingsFormat] = useState<VideoExportFormat | null>(null);
@@ -294,18 +294,6 @@ const App: React.FC = () => {
   const handleStepFrame = useCallback((dir: -1 | 1) => handleSeek(Math.max(0, Math.min(stateRef.current.duration, stateRef.current.currentTime + (dir * (1/30))))), [handleSeek, stateRef]);
   const handleZoom = useCallback((dir: -1 | 1) => setState(prev => ({ ...prev, zoomLevel: Math.max(10, prev.zoomLevel + (dir * 10)) })), [setState]);
   const handleToggleAudioTrackMute = useCallback(() => handleSetAudioRoleMuted('music', !effectiveMutedRoles(stateRef.current).has('music')), [handleSetAudioRoleMuted, stateRef]);
-
-  const handleScreenshot = useCallback(() => {
-    if (playerRef.current) {
-      const dataUrl = playerRef.current.captureFrame();
-      if (dataUrl) {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = `frame-${formatTimecode(stateRef.current.currentTime).replace(/:/g, '-')}.png`;
-        a.click();
-      }
-    }
-  }, [stateRef]);
 
   const handleCaptureCover = useCallback(() => {
     if (playerRef.current) {

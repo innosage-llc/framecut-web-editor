@@ -95,14 +95,20 @@ test('Free dimensions and watermark change the rendered pixels; Pro permits 4K',
   await page.route('**/api/licensing/**',route=>route.fulfill({json:{authenticated:false,pro:false}}));
   await page.goto('/');
   const output=await page.evaluate(async()=>{
-    const {outputSize,watermarkCanvas,drawExportWatermark}=await import('/utils/licenseExport.ts');
+    const {outputSize,watermarkCanvas,drawExportWatermark,screenshotCanvas}=await import('/utils/licenseExport.ts');
     const free=outputSize(1920,1080,false,2160), pro=outputSize(1920,1080,true,2160);
     const canvas=document.createElement('canvas');canvas.width=free.width;canvas.height=free.height;
     const ctx=canvas.getContext('2d')!;ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);
     const mark=watermarkCanvas(canvas.width,canvas.height);drawExportWatermark(ctx,mark);
     const pixel=Array.from(ctx.getImageData(canvas.width-mark.width-17,canvas.height-mark.height-17,1,1).data);
-    return{free,pro,pixel,untouched:Array.from(ctx.getImageData(10,10,1,1).data)};
+    const source=document.createElement('canvas');source.width=1920;source.height=1080;
+    source.getContext('2d')!.fillStyle='white';source.getContext('2d')!.fillRect(0,0,1920,1080);
+    const image=screenshotCanvas(source,false), paid=screenshotCanvas(source,true);
+    const imageMark=watermarkCanvas(image.width,image.height);
+    return{image:{width:image.width,height:image.height,pixel:image.getContext('2d')!.getImageData(image.width-imageMark.width-17,image.height-imageMark.height-17,1,1).data[0]},paid:{width:paid.width,height:paid.height},free,pro,pixel,untouched:Array.from(ctx.getImageData(10,10,1,1).data)};
   });
+  expect(output.image.width).toBe(1280); expect(output.image.height).toBe(720); expect(output.image.pixel).toBeLessThan(200);
+  expect(output.paid).toEqual({width:1920,height:1080});
   expect(output.free).toEqual({width:1280,height:720});
   expect(output.pro).toEqual({width:3840,height:2160});
   expect(output.pixel[0]).toBeLessThan(200);expect(output.untouched).toEqual([255,255,255,255]);

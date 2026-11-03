@@ -5,7 +5,7 @@ import { DEFAULT_GIF_OPTIONS, GifOptions, formatBytes } from '../utils/exportPre
 import { GifMemoryError, StreamingGifEncoder, isWebLimitError } from '../utils/gifExport';
 import { isHeapNearLimit, planGifExport, readDeviceBudget } from '../utils/gifPlan';
 import { licensing } from '../src/auth/licenseClient';
-import { outputSize, watermarkCanvas, drawExportWatermark } from '../utils/licenseExport';
+import { outputSize, watermarkCanvas, drawExportWatermark, screenshotCanvas } from '../utils/licenseExport';
 
 export interface GifWebLimitInfo {
     reason: 'size' | 'memory' | 'trimmed';
@@ -298,7 +298,28 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         }
     }, [state, setState, currentTimeRef, playerRef, exportGif]);
 
+    const handleScreenshot = useCallback(async () => {
+        try {
+            const source = playerRef.current?.getCanvas();
+            if (!source || !source.width || !source.height) return;
+            const snapshot = screenshotCanvas(source, true);
+            const time = currentTimeRef.current;
+            const expectedPro = licensing.snapshot().pro;
+            const pro = await licensing.exportAccess();
+            if (expectedPro && !pro) throw new Error('Pro access could not be confirmed. Refresh Account before taking another screenshot.');
+            const canvas = pro ? snapshot : screenshotCanvas(snapshot, false);
+            const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+                result => result ? resolve(result) : reject(new Error('Could not encode screenshot')), 'image/png'
+            ));
+            downloadBlob(blob, `frame-${time.toFixed(3).replace('.', '-')}`, 'png');
+        } catch (error) {
+            console.error('Screenshot export failed', error);
+            alert('Screenshot failed: ' + (error instanceof Error ? error.message : String(error)));
+        }
+    }, [playerRef, currentTimeRef]);
+
     return {
+        handleScreenshot,
         handleExportAction,
         gifWebLimit,
         dismissGifWebLimit: () => setGifWebLimit(null),
