@@ -19,6 +19,18 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         host: '0.0.0.0',
         headers: ISOLATION_HEADERS,
+        proxy: env.WEB_PROXY_TOKEN ? {
+          '/api/licensing': {
+            target: env.LICENSING_ORIGIN || 'https://framecut-license-staging.innosage.co',
+            changeOrigin: true,
+            rewrite: (url: string) => url.replace(/^\/api\/licensing/, '/v1/web'),
+            configure: (proxy: any) => proxy.on('proxyReq', (outgoing: any, incoming: any) => {
+              outgoing.setHeader('Origin', 'http://localhost:3000');
+              outgoing.setHeader('X-FrameCut-Proxy', env.WEB_PROXY_TOKEN);
+              outgoing.setHeader('X-FrameCut-Client-IP', incoming.socket.remoteAddress || 'local');
+            }),
+          },
+        } : undefined,
       },
       preview: { headers: ISOLATION_HEADERS },
       plugins: [react()],

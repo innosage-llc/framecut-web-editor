@@ -37,6 +37,7 @@ export const DEFAULT_GIF_OPTIONS: GifOptions = {
 };
 
 export interface VideoExportSettings {
+    resolution?: 720 | 1080 | 2160;
     format: VideoExportFormat;
     aspectRatio: number;
     gif: GifOptions;

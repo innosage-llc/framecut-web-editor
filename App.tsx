@@ -35,8 +35,14 @@ import { CameraBubble, normalizeBubble } from './utils/cameraBubble';
 import RecordingSetup from './components/RecordingSetup';
 import { effectiveMutedRoles } from './utils/audioLanes';
 import { renderProjectAudio } from './utils/audioRenderer';
+import { useLicense } from './hooks/useLicense';
+import AccountDialog from './components/AccountDialog';
+import { Crown } from 'lucide-react';
 
 const App: React.FC = () => {
+  const account = useLicense();
+  const [showAccount, setShowAccount] = useState(() => new URLSearchParams(window.location.search).has('framecut_account') || new URLSearchParams(window.location.search).has('framecut_checkout'));
+  const closeAccount = useCallback(() => setShowAccount(false), []);
   const {
     state, setState, stateRef, pushHistory, handleUndo, handleRedo,
     recalculateDuration, handleDelete, handleSplit, handleCrop, handleUpdateClip,
@@ -116,7 +122,7 @@ const App: React.FC = () => {
       raf2 = requestAnimationFrame(() => {
         const settings = pendingExport;
         setPendingExport(null);
-        handleExportAction(false, settings.format, settings.gif);
+        handleExportAction(false, settings.format, settings.gif, settings.resolution);
       });
     });
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
@@ -371,6 +377,7 @@ const App: React.FC = () => {
                 </a>
             </div>
             
+            <button onClick={() => setShowAccount(true)} className="inline-flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-300 hover:bg-amber-400/20" aria-label="FrameCut account"><Crown size={16} fill="currentColor" />{account.pro ? 'Pro · Account' : 'Free · Account'}</button>
             <HeaderControls 
                 hasClips={state.clips.length > 0 || state.audioClips.length > 0} 
                 coverImage={state.coverImage} 
@@ -612,6 +619,8 @@ const App: React.FC = () => {
         </div>
       )}
       <ExportModal
+        pro={account.pro}
+        onOpenAccount={() => { setExportSettingsFormat(null); setShowAccount(true); }}
         isExporting={state.isExporting}
         progress={state.exportProgress}
         showSettings={exportSettingsFormat !== null}
@@ -623,6 +632,7 @@ const App: React.FC = () => {
         onConfirmExport={handleConfirmExport}
       />
       <GifWebLimitPrompt info={gifWebLimit} onClose={dismissGifWebLimit} />
+      {showAccount && <AccountDialog account={account} onClose={closeAccount} />}
     </div>
   );
 };
