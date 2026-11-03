@@ -60,3 +60,11 @@ export const decodeGif = (page: Page, bytes: Buffer) => page.evaluate(async (b64
   }
   return { count, w, h, hashes };
 }, bytes.toString('base64'));
+
+export async function mockProAccount(page: Page) {
+  await page.route('**/api/licensing/**', route => route.fulfill({ json: {
+    authenticated: true, email: 'export-fixture@example.invalid', csrf: 'fixture', pro: true,
+    session_id: 'export-fixture', session_active: true, lease_until: Math.floor(Date.now() / 1000) + 120,
+    licenses: [], sessions: [],
+  } }));
+}

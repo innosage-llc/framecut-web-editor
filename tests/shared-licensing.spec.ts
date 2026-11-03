@@ -113,3 +113,15 @@ test('Free dimensions and watermark change the rendered pixels; Pro permits 4K',
   expect(output.pro).toEqual({width:3840,height:2160});
   expect(output.pixel[0]).toBeLessThan(200);expect(output.untouched).toEqual([255,255,255,255]);
 });
+
+
+test('Free GIF export cannot exceed fifteen seconds', async ({ page }) => {
+  const { fileURLToPath } = await import('node:url');
+  const { loadFixture, openGifSettings } = await import('./helpers/gifExportHelpers');
+  await page.route('**/api/licensing/**', route => route.fulfill({ json: { authenticated: false, pro: false } }));
+  await loadFixture(page, fileURLToPath(new URL('./fixtures/e2e-testsrc-30s-480p.webm', import.meta.url)), 30);
+  await openGifSettings(page);
+  await expect(page.getByRole('button', { name: 'Export GIF', exact: true })).toBeDisabled();
+  await expect(page.getByText('Free: watermarked 720p MP4 and GIFs up to 15 seconds.', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('GIF max longest side').locator('option[value="1280"]')).toHaveJSProperty('disabled', true);
+});

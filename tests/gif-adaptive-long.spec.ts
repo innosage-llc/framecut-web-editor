@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { decodeGif, loadFixture, openGifSettings, patchModule } from './helpers/gifExportHelpers';
+import { decodeGif, loadFixture, openGifSettings, patchModule, mockProAccount } from './helpers/gifExportHelpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_10S = path.join(__dirname, 'fixtures', 'e2e-testsrc-10s.webm');
@@ -48,6 +48,7 @@ test('planGifExport: no downgrade when it fits, ladder when it does not, trim + 
 
 test('30s export at 480p streams to a 300-frame GIF with bounded JS heap', async ({ page }) => {
   test.setTimeout(300_000);
+  await mockProAccount(page);
   await loadFixture(page, FIXTURE_30S, 30);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Performance.enable');
@@ -90,6 +91,7 @@ test('adaptive downgrade is shown up front and the macOS app is suggested when t
     [/GIF_HARD_MAX_FILE_BYTES\s*=\s*[^;]+;/, 'GIF_HARD_MAX_FILE_BYTES = 4 * 1024 * 1024;'],
     [/GIF_BYTES_PER_PIXEL_FRAME\s*=\s*[^;]+;/, 'GIF_BYTES_PER_PIXEL_FRAME = 1.5;'],
   ]);
+  await mockProAccount(page);
   await loadFixture(page, FIXTURE_10S, 10);
   await openGifSettings(page);
   await page.getByLabel('GIF frame rate').selectOption('15');
