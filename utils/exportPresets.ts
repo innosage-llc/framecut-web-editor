@@ -1,4 +1,4 @@
-export type VideoExportFormat = 'mp4' | 'webm' | 'gif';
+export type VideoExportFormat = 'mp4' | 'gif';
 
 export interface AspectPreset {
     id: '16:9' | '9:16' | '1:1';
@@ -37,6 +37,7 @@ export const DEFAULT_GIF_OPTIONS: GifOptions = {
 };
 
 export interface VideoExportSettings {
+    resolution?: 720 | 1080 | 2160;
     format: VideoExportFormat;
     aspectRatio: number;
     gif: GifOptions;

@@ -9,10 +9,10 @@ interface HeaderControlsProps {
     lastSaved?: Date | null;
     onCaptureCover: () => void;
     onSetCover: (url: string | null) => void;
-    onExport: (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a' | 'gif') => void;
+    onExport: (audioOnly: boolean, format?: 'mp4' | 'wav' | 'm4a' | 'gif') => void;
     onExportProject: () => void;
-    /** Opens the export settings dialog (ratio presets, MP4/WebM/GIF). */
-    onOpenExportSettings?: (format?: 'mp4' | 'webm' | 'gif') => void;
+    /** Opens the export settings dialog (ratio presets, MP4/GIF). */
+    onOpenExportSettings?: (format?: 'mp4' | 'gif') => void;
     onImportProject: (file: File) => void;
     onResetProject: () => void;
     onManualSave: () => void; // New Prop
@@ -208,14 +208,6 @@ const HeaderControls: React.FC<HeaderControlsProps> = ({
                                 <span className="text-[10px] text-zinc-500">Best for Instagram, TikTok, WhatsApp</span>
                             </button>
                             
-                            <button 
-                                onClick={() => { onExport(false, 'webm'); setShowExportMenu(false); }} 
-                                className="flex flex-col gap-0.5 px-3 py-2 hover:bg-zinc-800 text-zinc-300 rounded text-left w-full"
-                            >
-                                <span className="text-xs font-semibold text-white">Video (WebM)</span>
-                                <span className="text-[10px] text-zinc-500">Best for Web & Archive (High Quality)</span>
-                            </button>
-
                             {onOpenExportSettings && (
                                 <button
                                     data-testid="export-menu-gif"

@@ -35,8 +35,14 @@ import { CameraBubble, normalizeBubble } from './utils/cameraBubble';
 import RecordingSetup from './components/RecordingSetup';
 import { effectiveMutedRoles } from './utils/audioLanes';
 import { renderProjectAudio } from './utils/audioRenderer';
+import { useLicense } from './hooks/useLicense';
+import AccountDialog from './components/AccountDialog';
+import { Crown } from 'lucide-react';
 
 const App: React.FC = () => {
+  const account = useLicense();
+  const [showAccount, setShowAccount] = useState(() => new URLSearchParams(window.location.search).has('framecut_account') || new URLSearchParams(window.location.search).has('framecut_checkout'));
+  const closeAccount = useCallback(() => setShowAccount(false), []);
   const {
     state, setState, stateRef, pushHistory, handleUndo, handleRedo,
     recalculateDuration, handleDelete, handleSplit, handleCrop, handleUpdateClip,
@@ -94,9 +100,9 @@ const App: React.FC = () => {
   }, [pushHistory, setState]);
   const mutedRoles = effectiveMutedRoles(state);
   
-  const { handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
+  const { handleScreenshot, handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
 
-  // Export settings dialog (aspect-ratio presets + MP4/WebM/GIF)
+  // Export settings dialog (aspect-ratio presets + MP4/GIF)
   const [exportSettingsFormat, setExportSettingsFormat] = useState<VideoExportFormat | null>(null);
   const [pendingExport, setPendingExport] = useState<VideoExportSettings | null>(null);
 
@@ -116,7 +122,7 @@ const App: React.FC = () => {
       raf2 = requestAnimationFrame(() => {
         const settings = pendingExport;
         setPendingExport(null);
-        handleExportAction(false, settings.format, settings.gif);
+        handleExportAction(false, settings.format, settings.gif, settings.resolution);
       });
     });
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
@@ -289,18 +295,6 @@ const App: React.FC = () => {
   const handleZoom = useCallback((dir: -1 | 1) => setState(prev => ({ ...prev, zoomLevel: Math.max(10, prev.zoomLevel + (dir * 10)) })), [setState]);
   const handleToggleAudioTrackMute = useCallback(() => handleSetAudioRoleMuted('music', !effectiveMutedRoles(stateRef.current).has('music')), [handleSetAudioRoleMuted, stateRef]);
 
-  const handleScreenshot = useCallback(() => {
-    if (playerRef.current) {
-      const dataUrl = playerRef.current.captureFrame();
-      if (dataUrl) {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = `frame-${formatTimecode(stateRef.current.currentTime).replace(/:/g, '-')}.png`;
-        a.click();
-      }
-    }
-  }, [stateRef]);
-
   const handleCaptureCover = useCallback(() => {
     if (playerRef.current) {
       const dataUrl = playerRef.current.captureFrame();
@@ -372,6 +366,7 @@ const App: React.FC = () => {
                 </a>
             </div>
             
+            <button onClick={() => setShowAccount(true)} className="inline-flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-300 hover:bg-amber-400/20" aria-label="FrameCut account"><Crown size={16} fill="currentColor" />{account.pro ? 'Pro · Account' : 'Free · Account'}</button>
             <HeaderControls 
                 hasClips={state.clips.length > 0 || state.audioClips.length > 0} 
                 coverImage={state.coverImage} 
@@ -613,6 +608,8 @@ const App: React.FC = () => {
         </div>
       )}
       <ExportModal
+        pro={account.pro}
+        onOpenAccount={() => { setExportSettingsFormat(null); setShowAccount(true); }}
         isExporting={state.isExporting}
         progress={state.exportProgress}
         showSettings={exportSettingsFormat !== null}
@@ -624,6 +621,7 @@ const App: React.FC = () => {
         onConfirmExport={handleConfirmExport}
       />
       <GifWebLimitPrompt info={gifWebLimit} onClose={dismissGifWebLimit} />
+      {showAccount && <AccountDialog account={account} onClose={closeAccount} />}
     </div>
   );
 };

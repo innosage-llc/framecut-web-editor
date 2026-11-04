@@ -44,6 +44,8 @@ export const GifWebLimitPrompt: React.FC<{ info: { reason: string; detail: strin
 };
 
 interface ExportModalProps {
+    pro?: boolean;
+    onOpenAccount?: () => void;
     isExporting: boolean;
     progress: number;
     /** When true (and not exporting) the export settings dialog is shown. */
@@ -61,7 +63,6 @@ interface ExportModalProps {
 
 const FORMATS: { id: VideoExportFormat; label: string; hint: string }[] = [
     { id: 'mp4', label: 'MP4', hint: 'Video with audio' },
-    { id: 'webm', label: 'WebM', hint: 'Video with audio' },
     { id: 'gif', label: 'GIF', hint: 'Animated, no audio' },
 ];
 
@@ -70,6 +71,8 @@ const optionClass = (active: boolean) => `px-2 py-2 rounded text-xs border trans
 }`;
 
 const ExportSettings: React.FC<{
+    pro: boolean;
+    onOpenAccount?: () => void;
     aspectRatio: number;
     initialFormat: VideoExportFormat;
     projectDuration: number;
@@ -77,11 +80,14 @@ const ExportSettings: React.FC<{
     onCloseSettings: () => void;
     onConfirmExport: (settings: VideoExportSettings) => void;
 }> = ({
-    aspectRatio, initialFormat, projectDuration, canvasSize, onCloseSettings, onConfirmExport
+    aspectRatio, initialFormat, projectDuration, canvasSize, onCloseSettings, onConfirmExport, pro, onOpenAccount
 }) => {
+    const [resolution, setResolution] = useState<720 | 1080 | 2160>(pro ? 1080 : 720);
+    useEffect(() => { if (!pro) setResolution(720); }, [pro]);
     const [format, setFormat] = useState<VideoExportFormat>(initialFormat);
     const [ratio, setRatio] = useState<number>(aspectRatio);
     const [gif, setGif] = useState(DEFAULT_GIF_OPTIONS);
+    useEffect(() => { if (!pro) setGif(value => ({ ...value, maxLongestSide: Math.min(720, value.maxLongestSide) })); }, [pro]);
 
     useEffect(() => { setRatio(aspectRatio); }, [aspectRatio]);
     useEffect(() => { setFormat(initialFormat); }, [initialFormat]);
@@ -120,9 +126,9 @@ const ExportSettings: React.FC<{
 
                 <div className="space-y-2">
                     <div className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Format</div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                         {FORMATS.map(f => (
-                            <button key={f.id} data-testid={`export-format-${f.id}`} aria-pressed={format === f.id} onClick={() => setFormat(f.id)} className={optionClass(format === f.id)}>
+                            <button key={f.id} data-testid={`export-format-${f.id}`} aria-pressed={format === f.id} onClick={() => setFormat(f.id)} className={`${optionClass(format === f.id)} disabled:opacity-40`}>
                                 <div className="font-semibold">{f.label}</div>
                                 <div className="text-[10px] opacity-70">{f.hint}</div>
                             </button>
@@ -142,7 +148,7 @@ const ExportSettings: React.FC<{
                             <label className="text-xs text-zinc-300 space-y-1">
                                 <span className="block text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Max longest side</span>
                                 <select aria-label="GIF max longest side" value={gif.maxLongestSide} onChange={e => setGif({ ...gif, maxLongestSide: Number(e.target.value) })} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5">
-                                    {GIF_SIZE_OPTIONS.map(v => <option key={v} value={v}>{v} px{v === GIF_MAX_LONGEST_SIDE ? ' (max)' : ''}</option>)}
+                                    {GIF_SIZE_OPTIONS.map(v => <option key={v} value={v} disabled={!pro && v > 720}>{v} px{v > 720 ? ' · Pro' : ''}{v === GIF_MAX_LONGEST_SIDE ? ' (max)' : ''}</option>)}
                                 </select>
                             </label>
                         </div>
@@ -183,12 +189,13 @@ const ExportSettings: React.FC<{
                     </div>
                 )}
 
+                <div className="space-y-2 text-sm"><label>Video resolution<select aria-label="Video resolution" value={resolution} onChange={event => setResolution(Number(event.target.value) as 720 | 1080 | 2160)} className="ml-2 rounded border border-zinc-700 bg-zinc-800 p-2"><option value={720}>720p</option><option value={1080} disabled={!pro}>1080p · Pro</option><option value={2160} disabled={!pro}>4K · Pro</option></select></label><p className="text-xs text-zinc-400">{pro ? 'Pro: no watermark; full-length GIFs within browser resource limits.' : 'Free: watermarked 720p MP4 and GIFs up to 15 seconds.'}</p>{!pro && <button className="text-amber-300 underline" onClick={onOpenAccount}>Get Pro / redeem a license</button>}</div>
                 <div className="flex justify-end gap-2">
                     <button onClick={onCloseSettings} className="px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
                     <button
                         data-testid="export-confirm"
-                        disabled={false}
-                        onClick={() => onConfirmExport({ format, aspectRatio: ratio, gif })}
+                        disabled={!pro && format === 'gif' && projectDuration > 15}
+                        onClick={() => onConfirmExport({ format, aspectRatio: ratio, gif, resolution })}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                         Export {format.toUpperCase()}
@@ -200,6 +207,8 @@ const ExportSettings: React.FC<{
 };
 
 const ExportModal: React.FC<ExportModalProps> = ({
+    pro = false,
+    onOpenAccount,
     isExporting,
     progress,
     showSettings = false,
@@ -213,6 +222,8 @@ const ExportModal: React.FC<ExportModalProps> = ({
     if (!isExporting && showSettings && onCloseSettings && onConfirmExport) {
         return (
             <ExportSettings
+                pro={pro}
+                onOpenAccount={onOpenAccount}
                 aspectRatio={aspectRatio}
                 initialFormat={initialFormat}
                 projectDuration={projectDuration}

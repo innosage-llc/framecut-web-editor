@@ -8,6 +8,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
+    channel: process.env.FRAMECUT_TEST_BROWSER_CHANNEL,
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
     // Chromium flag to auto-approve screen sharing

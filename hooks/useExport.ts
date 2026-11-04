@@ -4,6 +4,8 @@ import { renderProjectAudio, audioBufferToWav } from '../utils/audioRenderer';
 import { DEFAULT_GIF_OPTIONS, GifOptions, formatBytes } from '../utils/exportPresets';
 import { GifMemoryError, StreamingGifEncoder, isWebLimitError } from '../utils/gifExport';
 import { isHeapNearLimit, planGifExport, readDeviceBudget } from '../utils/gifPlan';
+import { licensing } from '../src/auth/licenseClient';
+import { outputSize, watermarkCanvas, drawExportWatermark, screenshotCanvas } from '../utils/licenseExport';
 
 export interface GifWebLimitInfo {
     reason: 'size' | 'memory' | 'trimmed';
@@ -63,7 +65,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
      * Settings adapt to the project (planGifExport, PROVISIONAL limits); memory is bounded by the
      * in-flight queue and guarded against the JS heap limit.
      */
-    const exportGif = useCallback(async (opts: GifOptions) => {
+    const exportGif = useCallback(async (opts: GifOptions, pro: boolean) => {
         const player = playerRef.current;
         if (!player) return;
         // Lock the export canvas at source size and render into it explicitly. Previously getCanvas()
@@ -77,6 +79,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         const plan = planGifExport(canvas.width, canvas.height, state.duration, opts, readDeviceBudget());
         if ((window as any).__FRAMECUT_E2E_ENABLED__) (window as any).__FRAMECUT_LAST_GIF_PLAN__ = plan;
         const { width, height, duration, fps, colors } = plan;
+        const mark = pro ? null : watermarkCanvas(width, height);
         const frameCanvas = document.createElement('canvas');
         frameCanvas.width = width;
         frameCanvas.height = height;
@@ -113,6 +116,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
                 ctx.fillStyle = state.canvasBackgroundColor || '#000000';
                 ctx.fillRect(0, 0, width, height);
                 ctx.drawImage(canvas, 0, 0, width, height);
+                if (mark) drawExportWatermark(ctx, mark);
                 // Waits while GIF_MAX_FRAMES_IN_FLIGHT frames are queued; rejects on size/worker failure.
                 await encoder.addFrame(ctx.getImageData(0, 0, width, height));
 
@@ -146,7 +150,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
     }, [state, setState, currentTimeRef, playerRef]);
 
-    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a' | 'gif', gifOptions: GifOptions = DEFAULT_GIF_OPTIONS) => {
+    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'wav' | 'm4a' | 'gif', gifOptions: GifOptions = DEFAULT_GIF_OPTIONS, resolution = 1080) => {
         if (state.clips.length === 0 && state.audioClips.length === 0) return;
         if (!playerRef.current) return;
 
@@ -165,8 +169,12 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         }));
 
         try {
+            const expectedPro = licensing.snapshot().pro;
+            const pro = audioOnly ? false : await licensing.exportAccess();
+            if (!audioOnly && expectedPro && !pro) throw new Error('Pro access could not be confirmed. Refresh Account, or reopen Export to choose a Free watermarked export.');
+            if (!audioOnly && !pro && format === 'gif' && state.duration > 15) throw new Error('Free GIF export supports up to 15 seconds. Trim the project or activate Pro from Account.');
             if (!audioOnly && format === 'gif') {
-                await exportGif(gifOptions);
+                await exportGif(pro ? gifOptions : { ...gifOptions, maxLongestSide: Math.min(720, gifOptions.maxLongestSide) }, pro);
                 return;
             }
 
@@ -200,8 +208,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const canvas = player.getCanvas();
             if (!canvas) throw new Error('No canvas found');
 
-            const width = Math.floor(canvas.width / 2) * 2;
-            const height = Math.floor(canvas.height / 2) * 2;
+            const { width, height } = outputSize(canvas.width, canvas.height, pro, resolution);
             const fps = 30;
             const recorder = playerRef.current;
 
@@ -210,6 +217,9 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             if (exportConfig && recorder.prepareExportCanvas) {
                 exportCanvas = recorder.prepareExportCanvas(exportConfig.width, exportConfig.height);
             }
+            const mark = pro ? null : watermarkCanvas(exportCanvas.width, exportCanvas.height);
+            const exportContext = mark ? exportCanvas.getContext('2d') : null;
+            if (mark && !exportContext) throw new Error('Could not render export watermark');
 
             const duration = state.duration;
             const totalFrames = Math.ceil(duration * fps);
@@ -238,6 +248,8 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
                 }
 
                 player.renderFrame('export');
+
+                if (mark && exportContext) drawExportWatermark(exportContext, mark);
 
                 const timestampUs = time * 1_000_000;
                 const isKeyFrame = i % (fps * 2) === 0;
@@ -285,7 +297,28 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         }
     }, [state, setState, currentTimeRef, playerRef, exportGif]);
 
+    const handleScreenshot = useCallback(async () => {
+        try {
+            const source = playerRef.current?.getCanvas();
+            if (!source || !source.width || !source.height) return;
+            const snapshot = screenshotCanvas(source, true);
+            const time = currentTimeRef.current;
+            const expectedPro = licensing.snapshot().pro;
+            const pro = await licensing.exportAccess();
+            if (expectedPro && !pro) throw new Error('Pro access could not be confirmed. Refresh Account before taking another screenshot.');
+            const canvas = pro ? snapshot : screenshotCanvas(snapshot, false);
+            const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+                result => result ? resolve(result) : reject(new Error('Could not encode screenshot')), 'image/png'
+            ));
+            downloadBlob(blob, `frame-${time.toFixed(3).replace('.', '-')}`, 'png');
+        } catch (error) {
+            console.error('Screenshot export failed', error);
+            alert('Screenshot failed: ' + (error instanceof Error ? error.message : String(error)));
+        }
+    }, [playerRef, currentTimeRef]);
+
     return {
+        handleScreenshot,
         handleExportAction,
         gifWebLimit,
         dismissGifWebLimit: () => setGifWebLimit(null),
