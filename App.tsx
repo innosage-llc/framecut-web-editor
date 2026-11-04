@@ -102,7 +102,7 @@ const App: React.FC = () => {
   
   const { handleScreenshot, handleExportAction, gifWebLimit, dismissGifWebLimit } = useExport({ state, setState, playerRef, currentTimeRef });
 
-  // Export settings dialog (aspect-ratio presets + MP4/WebM/GIF)
+  // Export settings dialog (aspect-ratio presets + MP4/GIF)
   const [exportSettingsFormat, setExportSettingsFormat] = useState<VideoExportFormat | null>(null);
   const [pendingExport, setPendingExport] = useState<VideoExportSettings | null>(null);
 

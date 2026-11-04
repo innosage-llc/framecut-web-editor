@@ -63,7 +63,6 @@ interface ExportModalProps {
 
 const FORMATS: { id: VideoExportFormat; label: string; hint: string }[] = [
     { id: 'mp4', label: 'MP4', hint: 'Video with audio' },
-    { id: 'webm', label: 'WebM', hint: 'Video with audio' },
     { id: 'gif', label: 'GIF', hint: 'Animated, no audio' },
 ];
 
@@ -127,9 +126,9 @@ const ExportSettings: React.FC<{
 
                 <div className="space-y-2">
                     <div className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Format</div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                         {FORMATS.map(f => (
-                            <button key={f.id} disabled={!pro && f.id === 'webm'} data-testid={`export-format-${f.id}`} aria-pressed={format === f.id} onClick={() => setFormat(f.id)} className={`${optionClass(format === f.id)} disabled:opacity-40`}>
+                            <button key={f.id} data-testid={`export-format-${f.id}`} aria-pressed={format === f.id} onClick={() => setFormat(f.id)} className={`${optionClass(format === f.id)} disabled:opacity-40`}>
                                 <div className="font-semibold">{f.label}</div>
                                 <div className="text-[10px] opacity-70">{f.hint}</div>
                             </button>
@@ -195,7 +194,7 @@ const ExportSettings: React.FC<{
                     <button onClick={onCloseSettings} className="px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
                     <button
                         data-testid="export-confirm"
-                        disabled={!pro && ((format === 'gif' && projectDuration > 15) || format === 'webm')}
+                        disabled={!pro && format === 'gif' && projectDuration > 15}
                         onClick={() => onConfirmExport({ format, aspectRatio: ratio, gif, resolution })}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                     >

@@ -66,3 +66,20 @@ Backend tests include code binding/normalization and SQLite tests that execute t
 Hosted email verification, real sandbox purchase/redemption, customer-portal cancellation, and cross-platform entitlement checks must be recorded before this integration is declared end-to-end validated. Synthetic seeded authentication fixtures are security tests and do not establish inbox delivery.
 
 Changes under `src/auth` require human review under `AGENTS.md`. Keep the authentication PR open for that review rather than running the automatic squash-merge path.
+
+
+## Production cutover
+
+The production Pages project is `framecut-production`, serving `https://framecut.innosage.co`. Its licensing bindings are currently unset. Provision the isolated live backend and catalog first; do not point the public app at the sandbox.
+
+Configure these **production** bindings before deploying the reviewed authentication change:
+
+| Binding | Production value |
+| --- | --- |
+| `LICENSING` | Service binding to `license-worker-production` |
+| `LICENSING_ORIGIN` | Proposed `https://framecut-license.innosage.co` |
+| `WEB_PROXY_TOKEN` | Production secret matching that Worker; distinct from staging |
+
+The backend's exact web allowlist must include only the canonical production web origin. The backend needs live Stripe products/prices, portal configuration, permanent signed webhooks, migrations 0001–0006, signing/auth/delivery secrets, and operational mail/error monitoring. The full sequence and verified staging evidence are recorded in `license-worker/FRAMECUT.md` under Production launch gate in the companion backend PR.
+
+Review fixes remove the unsupported WebM offer, mark refunded licenses inactive instead of promising future paid access, and make proxy configuration/stream/timeout failures return safe account-service errors. Supported visual export formats are MP4 and GIF, with PNG screenshots separately available. No live billing is enabled by merging this source change alone.

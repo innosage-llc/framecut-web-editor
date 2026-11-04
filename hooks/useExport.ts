@@ -150,7 +150,7 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
         setTimeout(() => setState(prev => ({ ...prev, showSuccessToast: false, toastMessage: null })), 3000);
     }, [state, setState, currentTimeRef, playerRef]);
 
-    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'webm' | 'wav' | 'm4a' | 'gif', gifOptions: GifOptions = DEFAULT_GIF_OPTIONS, resolution = 1080) => {
+    const handleExportAction = useCallback(async (audioOnly: boolean, format?: 'mp4' | 'wav' | 'm4a' | 'gif', gifOptions: GifOptions = DEFAULT_GIF_OPTIONS, resolution = 1080) => {
         if (state.clips.length === 0 && state.audioClips.length === 0) return;
         if (!playerRef.current) return;
 
@@ -172,7 +172,6 @@ export const useExport = ({ state, setState, playerRef, currentTimeRef }: UseExp
             const expectedPro = licensing.snapshot().pro;
             const pro = audioOnly ? false : await licensing.exportAccess();
             if (!audioOnly && expectedPro && !pro) throw new Error('Pro access could not be confirmed. Refresh Account, or reopen Export to choose a Free watermarked export.');
-            if (!audioOnly && !pro && format === 'webm') throw new Error('Free export supports MP4 and GIF. Choose MP4 or activate Pro from Account.');
             if (!audioOnly && !pro && format === 'gif' && state.duration > 15) throw new Error('Free GIF export supports up to 15 seconds. Trim the project or activate Pro from Account.');
             if (!audioOnly && format === 'gif') {
                 await exportGif(pro ? gifOptions : { ...gifOptions, maxLongestSide: Math.min(720, gifOptions.maxLongestSide) }, pro);

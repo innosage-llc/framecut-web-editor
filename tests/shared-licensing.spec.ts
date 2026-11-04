@@ -125,3 +125,46 @@ test('Free GIF export cannot exceed fifteen seconds', async ({ page }) => {
   await expect(page.getByText('Free: watermarked 720p MP4 and GIFs up to 15 seconds.', { exact: true })).toBeVisible();
   await expect(page.getByLabel('GIF max longest side').locator('option[value="1280"]')).toHaveJSProperty('disabled', true);
 });
+
+test('proxy fails safely for invalid configuration and interrupted request bodies', async () => {
+  const invalid = await onRequest({ request: new Request('https://web.example/api/licensing/account'), env: { LICENSING_ORIGIN: 'not a URL', WEB_PROXY_TOKEN: 'fixture' }, params: { path: ['account'] } });
+  expect(invalid.status).toBe(503);
+  const init = { method: 'POST', headers: { Origin: 'https://web.example', 'Content-Type': 'application/json' }, body: new ReadableStream({ start(controller) { controller.error(new Error('private body failure')); } }), duplex: 'half' };
+  const interrupted = await onRequest({ request: new Request('https://web.example/api/licensing/redeem', init), env: { LICENSING_ORIGIN: 'https://license.example', WEB_PROXY_TOKEN: 'fixture' }, params: { path: ['redeem'] } });
+  expect(interrupted.status).toBe(503);
+  expect(await interrupted.text()).not.toContain('private body failure');
+  expect(interrupted.headers.get('Cache-Control')).toBe('no-store');
+});
+
+test('proxy propagates its upstream timeout and returns a safe failure', async () => {
+  const timeout = AbortSignal.timeout;
+  AbortSignal.timeout = () => AbortSignal.abort(new DOMException('private timeout details', 'TimeoutError'));
+  try {
+    const response = await onRequest({ request: new Request('https://web.example/api/licensing/account'), env: { LICENSING_ORIGIN: 'https://license.example', WEB_PROXY_TOKEN: 'fixture', LICENSING: { fetch: async request => { request.signal.throwIfAborted(); return Response.json({ authenticated: true }); } } }, params: { path: ['account'] } });
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain('private timeout details');
+  } finally { AbortSignal.timeout = timeout; }
+});
+
+test('refunded subscriptions do not promise future paid access', async ({ page }) => {
+  await page.route('**/api/licensing/**', route => route.fulfill({ json: { authenticated: true, email: 'owner@example.com', csrf: 'fixture', pro: false, session_id: 'one', session_active: true, lease_until: Math.floor(Date.now()/1000)+120, sessions: [], licenses: [{ id: 'refunded', status: 'refunded', edition: 'pro', billing_kind: 'subscription', ent_exp: Math.floor(Date.now()/1000)+86400, updates_until: null, key_suffix: 'TEST' }] } }));
+  await page.goto('/?framecut_account=1');
+  await expect(page.getByText('Pro access is inactive.', { exact: true })).toBeVisible();
+  await expect(page.getByText(/^Paid through/)).toHaveCount(0);
+});
+
+test('Pro export settings offer supported formats and 4K', async ({ page }) => {
+  const { fileURLToPath } = await import('node:url');
+  const { loadFixture, mockProAccount } = await import('./helpers/gifExportHelpers');
+  await mockProAccount(page);
+  await loadFixture(page, fileURLToPath(new URL('./fixtures/e2e-testsrc-10s.webm', import.meta.url)), 10);
+  await expect(page.getByRole('button', { name: 'FrameCut account', exact: true })).toContainText('Pro');
+  await page.getByRole('button', { name: /^Export/ }).first().click();
+  await expect(page.getByRole('button', { name: 'Video (WebM)', exact: true })).toHaveCount(0);
+  await page.getByTestId('export-menu-presets').click();
+  await expect(page.getByTestId('export-format-mp4')).toBeVisible();
+  await expect(page.getByTestId('export-format-gif')).toBeVisible();
+  await expect(page.getByTestId('export-format-webm')).toHaveCount(0);
+  await page.getByLabel('Video resolution').selectOption('2160');
+  await expect(page.getByLabel('Video resolution')).toHaveValue('2160');
+});
