@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { CheckCircle2, ChevronLeft, ChevronRight, Crown } from 'lucide-react';
 
 const slides = [
-  { id: 'export', title: 'Every detail.\nBeautifully exported.', caption: 'No watermark. Up to 4K. Longer GIFs.', alt: 'FrameCut web export settings with 4K selected beside the demo video' },
+  { id: 'export', title: 'Every detail.\nBeautifully exported.', caption: 'Export a crisp, polished version of your work.', alt: 'FrameCut web export settings with 4K selected beside the demo video' },
   { id: 'editor', title: 'Your story.\nReady to share.', caption: 'Record and edit for free. Give your exports the Pro finish.', alt: 'FrameCut web editor showing a demo video and editing timeline' },
 ];
 
@@ -19,6 +19,10 @@ export function ProShowcase() {
       <img src={`/pro-features/${slide.id}.jpg`} width={1440} height={900} alt={slide.alt} className="aspect-[8/5] w-full rounded-xl object-contain shadow-xl" />
     </div>
     <p className="min-h-10 text-sm leading-relaxed text-zinc-300">{slide.caption}</p>
+    <div role="region" aria-label="Included with every Pro plan" className="mt-4">
+      <h4 className="text-xs font-semibold">Every plan includes</h4>
+      <ul className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">{['No watermark', '1080p & 4K video', 'Longer GIFs', 'Clean PNG images'].map(feature => <li key={feature} className="flex items-start gap-2 text-xs text-zinc-300"><CheckCircle2 size={14} className="shrink-0 text-blue-300" aria-hidden="true" />{feature}</li>)}</ul>
+    </div>
     <div className="mt-6 flex items-center justify-between gap-4">
       <button type="button" aria-label="Previous feature" onClick={() => move(-1)} className="rounded-full border border-white/15 p-2 text-zinc-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"><ChevronLeft size={16} /></button>
       <div className="flex gap-2" aria-label="Choose a feature">{slides.map((item, itemIndex) => <button key={item.id} type="button" aria-label={`Show ${item.id} feature`} aria-pressed={index === itemIndex} onClick={() => setIndex(itemIndex)} className="rounded-full p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"><span className={`block h-1.5 w-1.5 rounded-full ${index === itemIndex ? 'bg-blue-400' : 'bg-zinc-600'}`} /></button>)}</div>
@@ -37,10 +41,6 @@ export function ProPlans({ authenticated, busy, checkout }: { authenticated: boo
   const [selected, setSelected] = useState(plans[0].sku);
   return <section aria-label="Pro plans" className="space-y-3">
     <div><h3 className="text-2xl font-semibold tracking-tight">Choose your Pro</h3><p className="mt-2 text-xs text-zinc-400">Web Pro + two Macs · prices in USD</p></div>
-    <div role="region" aria-label="Included with every Pro plan" className="rounded-xl border border-blue-400/15 bg-blue-400/5 p-3">
-      <h4 className="text-xs font-semibold">Every plan includes</h4>
-      <ul className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">{['No watermark', '1080p & 4K video', 'Longer GIFs', 'Clean PNG images'].map(feature => <li key={feature} className="flex items-start gap-2 text-xs text-zinc-300"><CheckCircle2 size={14} className="shrink-0 text-blue-300" aria-hidden="true" />{feature}</li>)}</ul>
-    </div>
     <div role="group" aria-label="Choose a Pro plan" className="space-y-3">{plans.map(plan => <button type="button" key={plan.sku} disabled={busy} aria-pressed={selected === plan.sku} onClick={() => setSelected(plan.sku)}
       className={`grid w-full grid-cols-[0.8fr_1.2fr] items-center gap-4 rounded-2xl border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-300 disabled:opacity-50 ${selected === plan.sku ? 'border-blue-400 bg-blue-400/10' : 'border-zinc-700 bg-zinc-950/30 hover:border-zinc-500'}`}>
       <span><span className="block text-sm font-semibold">{plan.title}</span><span className="mt-2 block text-3xl font-semibold tracking-tight">{plan.price}<span className="ml-1 text-xs font-normal tracking-normal text-zinc-400">{plan.period}</span></span></span>
