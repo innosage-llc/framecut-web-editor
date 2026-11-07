@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { Crown, X } from 'lucide-react';
 import { AccountState, SharedLicense, licensing } from '../src/auth/licenseClient';
 
+import { ProPlans, ProShowcase } from './ProShowcase';
+
 const button = 'rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700 disabled:opacity-50';
 const input = 'w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500';
 const licenseSummary = (license: SharedLicense) => {
@@ -50,9 +52,13 @@ export default function AccountDialog({ account, onClose }: { account: AccountSt
     });
   };
   return createPortal(<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={root} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title" className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl space-y-5">
-      <div className="flex items-center justify-between"><h2 id="account-title" className="flex items-center gap-2 text-xl font-semibold"><Crown className="text-amber-400" size={22} /> FrameCut account</h2><button aria-label="Close account" onClick={onClose} className={button}><X size={18} /></button></div>
-      <p className="text-sm text-zinc-400">One license for web Pro and two Macs. The web editor stays free with watermarked 720p exports.</p>
+    <div ref={root} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title" className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div className="sticky -top-6 z-10 -mx-6 flex items-center justify-between bg-zinc-900 px-6 py-4"><h2 id="account-title" className="flex items-center gap-2 text-xl font-semibold"><Crown className="text-amber-400" size={22} /> FrameCut account</h2><button aria-label="Close account" onClick={onClose} className={button}><X size={18} /></button></div>
+      <div className="grid gap-8 lg:grid-cols-[1.1fr_1fr]">
+      <ProShowcase />
+      <div className="space-y-5">
+      {!account.pro && <ProPlans authenticated={account.authenticated} busy={busy} checkout={sku => external('checkout', sku)} />}
+      <h3 className="border-t border-zinc-700 pt-5 font-semibold">{account.authenticated ? 'Your account' : 'Sign in to continue'}</h3>
       {account.error && <p role="status" className="text-sm text-amber-300">{account.error}</p>}
       <fieldset disabled={busy} className="space-y-5 disabled:opacity-70">
         {!account.authenticated ? <form className="space-y-3" onSubmit={event => { event.preventDefault(); void run(async () => {
@@ -71,12 +77,12 @@ export default function AccountDialog({ account, onClose }: { account: AccountSt
           </form>
           {account.licenses.length > 0 && <section className="space-y-2"><h3 className="font-medium">Your licenses</h3>{account.licenses.map(license => <div key={license.id} className="rounded-lg border border-zinc-700 p-3 space-y-2"><p className="text-sm">{license.billing_kind === 'perpetual' ? 'One-time Pro' : 'Pro subscription'} · {license.status}{license.key_suffix ? ` · …${license.key_suffix}` : ''}</p><p className="text-xs text-zinc-400">{licenseSummary(license)}</p><button className={button} onClick={() => external('billing', license.id)}>Manage Stripe billing</button></div>)}</section>}
           <section className="space-y-2"><h3 className="font-medium">Active browser sessions · {account.sessions.length}/2</h3><p className="text-xs text-zinc-400">Tabs in the same browser share a session. Abandoned sessions expire after two minutes. Releasing one stops it from automatically reclaiming access.</p>{account.sessions.map(session => <div key={session.id} className="flex items-center justify-between gap-2 text-sm"><span>{session.label}{session.id === account.session_id ? ' · This browser' : ''}</span><button className={button} onClick={() => void run(() => licensing.release(session.id))}>Release session</button></div>)}</section>
-          <section className="space-y-2"><h3 className="font-medium">Get Pro</h3><div className="flex flex-wrap gap-2">{[['framecut_pro_perpetual','$59 once'],['framecut_pro_monthly','$8/month'],['framecut_pro_annual','$48/year']].map(([sku,label]) => <button key={sku} className={button} onClick={() => external('checkout',sku)}>{label}</button>)}</div><p className="text-xs text-zinc-400">One-time Pro includes a year of Mac updates; subscriptions renew until canceled. 30-day refund window. Contact licensing@innosage.co for refunds or email changes.</p></section>
           <button className={button} onClick={() => void run(() => licensing.refresh())}>Refresh account</button>
         </>}
       </fieldset>
       {(busy || message) && <p role="status" className="text-sm text-blue-200">{busy ? 'Working…' : message}</p>}
       {link && <a className="text-sm text-blue-300 underline" href={link} target="_blank" rel="noopener noreferrer">Open secure Stripe page</a>}
+      </div></div>
     </div>
   </div>, document.body);
 }
