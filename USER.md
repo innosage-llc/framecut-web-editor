@@ -13,5 +13,5 @@
 
 ## What I Care About
 - Build must stay green at all times.
-- Don't touch `master` directly — always go through a PR.
+- Don't touch `main` directly — always go through a PR.
 - Prefer surgical, minimal diffs over large rewrites.

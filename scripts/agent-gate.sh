@@ -12,8 +12,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Define base branch (adjust to 'main' or 'master' depending on repo)
-BASE_BRANCH="master"
+# Define the repository's protected base branch.
+BASE_BRANCH="main"
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║        🤖 Agent Gate CI Workflow                         ║${NC}"
