@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, ChevronLeft, ChevronRight, Monitor } from 'lucide-react';
 
 const slides = [
@@ -11,12 +11,24 @@ const slides = [
 
 export function ProShowcase() {
   const [index, setIndex] = useState(0);
+  const [hovering, setHovering] = useState(false);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (hovering || focused) return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden && !motion.matches) setIndex(current => (current + 1) % slides.length);
+    }, 6000);
+    return () => window.clearInterval(timer);
+  }, [index, hovering, focused]);
   const slide = slides[index];
   const move = (offset: number) => setIndex(current => (current + offset + slides.length) % slides.length);
   return <section aria-label="FrameCut Pro feature carousel" aria-roledescription="carousel" tabIndex={0}
+    onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}
+    onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false); }}
     onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}
     className="flex min-w-0 flex-col gap-4 rounded-2xl border border-white/10 bg-gradient-to-br from-zinc-800/80 to-blue-950/30 p-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400">
-    <div className="flex items-center justify-between text-xs text-zinc-400"><span className="flex items-center gap-2 font-semibold"><Monitor size={16} aria-hidden="true" />FrameCut for Mac</span><span className="tabular-nums" aria-live="polite"><span className="sr-only">{slide.title} </span>{index + 1} / {slides.length}</span></div>
+    <div className="flex items-center justify-between text-xs text-zinc-400"><span className="flex items-center gap-2 font-semibold"><Monitor size={16} aria-hidden="true" />FrameCut for Mac</span></div>
     <img src={`/pro-features/app-store-${slide.id}.png`} width={2880} height={1800} alt={`FrameCut for Mac: ${slide.title}`} className="aspect-[8/5] w-full rounded-xl object-contain" />
     <div role="region" aria-label="Included with every Pro plan">
       <h4 className="text-xs font-semibold">Every plan includes</h4>
