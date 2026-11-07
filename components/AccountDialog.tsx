@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Crown, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { AccountState, SharedLicense, licensing } from '../src/auth/licenseClient';
 
 import { ProPlans, ProShowcase } from './ProShowcase';
@@ -52,9 +52,9 @@ export default function AccountDialog({ account, onClose }: { account: AccountSt
     });
   };
   return createPortal(<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={root} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title" className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl space-y-5">
-      <div className="sticky -top-6 z-10 -mx-6 flex items-center justify-between bg-zinc-900 px-6 py-4"><h2 id="account-title" className="flex items-center gap-2 text-xl font-semibold"><Crown className="text-amber-400" size={22} /> FrameCut account</h2><button aria-label="Close account" onClick={onClose} className={button}><X size={18} /></button></div>
-      <div className="grid gap-8 lg:grid-cols-[1.1fr_1fr]">
+    <div ref={root} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title" className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div className="sticky -top-6 z-10 -mx-6 flex items-center justify-end bg-zinc-900 px-6 py-1"><h2 id="account-title" className="sr-only">FrameCut account</h2><button aria-label="Close account" onClick={onClose} className={button}><X size={18} /></button></div>
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,0.75fr)_minmax(0,1.1fr)]">
       <ProShowcase />
       <div className="space-y-5">
       {!account.pro && <ProPlans authenticated={account.authenticated} busy={busy} checkout={sku => external('checkout', sku)} />}

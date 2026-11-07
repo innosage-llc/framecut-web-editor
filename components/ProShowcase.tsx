@@ -1,38 +1,48 @@
 import React, { useState } from 'react';
-import { Check, Crown, Film, Monitor, Sparkles } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Crown } from 'lucide-react';
 
-const features = [
-  { icon: Sparkles, title: 'A clean, professional finish', detail: 'Export videos, GIFs, and PNG images without the FrameCut watermark.' },
-  { icon: Monitor, title: 'Every detail, up to 4K', detail: 'Unlock 1080p and 4K video exports, beyond Free’s 720p limit.' },
-  { icon: Film, title: 'GIFs that tell the whole story', detail: 'Go beyond 15 seconds, with larger GIFs within your browser’s resource limits.' },
+const slides = [
+  { id: 'export', title: 'Every detail.\nBeautifully exported.', caption: 'No watermark. Up to 4K. Longer GIFs.', alt: 'FrameCut web export settings with 4K selected beside the demo video' },
+  { id: 'editor', title: 'Your story.\nReady to share.', caption: 'Record and edit for free. Give your exports the Pro finish.', alt: 'FrameCut web editor showing a demo video and editing timeline' },
 ];
 
 export function ProShowcase() {
-  const [preview, setPreview] = useState('export');
-  return <section aria-label="FrameCut Pro features" className="space-y-5">
-    <div><p className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-violet-300"><Crown size={18} aria-hidden="true" /> FRAMECUT PRO</p>
-      <h3 className="text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">Your best work.<br />Beautifully exported.</h3>
-      <p className="mt-3 text-sm leading-relaxed text-zinc-300">Keep every detail. Make the final video yours.</p></div>
-    <figure className="overflow-hidden rounded-xl border border-white/10 bg-zinc-950">
-      <img src={`/pro-features/${preview}.jpg`} width={1440} height={900} alt={preview === 'export' ? 'FrameCut web export settings with 4K video resolution selected' : 'FrameCut web editor with a video preview and editing timeline'} className="aspect-[8/5] w-full object-contain" />
-      <figcaption className="flex gap-2 border-t border-white/10 p-2">{[['export', 'Export in detail'], ['editor', 'See the editor']].map(([id, label]) => <button key={id} type="button" aria-pressed={preview === id} onClick={() => setPreview(id)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-300 ${preview === id ? 'bg-violet-500/20 text-violet-200' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}>{label}</button>)}</figcaption>
-    </figure>
-    <div className="space-y-4">{features.map(({ icon: Icon, title, detail }) => <div key={title} className="flex items-start gap-3"><span className="rounded-lg bg-violet-400/10 p-2 text-violet-300"><Icon size={18} aria-hidden="true" /></span><div><h4 className="text-sm font-semibold">{title}</h4><p className="mt-1 text-xs leading-relaxed text-zinc-400">{detail}</p></div></div>)}</div>
-    <p className="rounded-xl border border-white/10 p-3 text-xs leading-relaxed text-zinc-400"><Check size={14} className="mr-1 inline text-emerald-400" aria-hidden="true" /> Recording, importing, editing, zoom, backgrounds, and captions are already free. Free exports have a watermark: 720p video and GIFs up to 15 seconds.</p>
+  const [index, setIndex] = useState(0);
+  const slide = slides[index];
+  const move = (offset: number) => setIndex(current => (current + offset + slides.length) % slides.length);
+  return <section aria-label="FrameCut Pro feature carousel" aria-roledescription="carousel" tabIndex={0}
+    onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}
+    className="flex min-w-0 flex-col rounded-2xl border border-white/10 bg-gradient-to-br from-zinc-800/80 to-blue-950/30 p-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 lg:min-h-[620px]">
+    <p className="flex items-center gap-2 text-xs font-semibold tracking-widest text-blue-300"><Crown size={16} aria-hidden="true" /> FRAMECUT PRO</p>
+    <h3 className="mt-5 whitespace-pre-line text-3xl font-semibold leading-tight tracking-tight" aria-live="polite">{slide.title}</h3>
+    <div className="my-6 flex flex-1 items-center">
+      <img src={`/pro-features/${slide.id}.jpg`} width={1440} height={900} alt={slide.alt} className="aspect-[8/5] w-full rounded-xl object-contain shadow-xl" />
+    </div>
+    <p className="min-h-10 text-sm leading-relaxed text-zinc-300">{slide.caption}</p>
+    <div className="mt-6 flex items-center justify-between gap-4">
+      <button type="button" aria-label="Previous feature" onClick={() => move(-1)} className="rounded-full border border-white/15 p-2 text-zinc-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"><ChevronLeft size={16} /></button>
+      <div className="flex gap-2" aria-label="Choose a feature">{slides.map((item, itemIndex) => <button key={item.id} type="button" aria-label={`Show ${item.id} feature`} aria-pressed={index === itemIndex} onClick={() => setIndex(itemIndex)} className="rounded-full p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"><span className={`block h-1.5 w-1.5 rounded-full ${index === itemIndex ? 'bg-blue-400' : 'bg-zinc-600'}`} /></button>)}</div>
+      <button type="button" aria-label="Next feature" onClick={() => move(1)} className="rounded-full border border-white/15 p-2 text-zinc-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"><ChevronRight size={16} /></button>
+    </div>
   </section>;
 }
 
+const plans = [
+  { sku: 'framecut_pro_perpetual', title: 'One-time Pro', price: '$59', period: 'once', badge: 'Pay once', highlights: ['No watermark · up to 4K', 'Longer GIFs · clean PNGs', '1 year of Mac updates'] },
+  { sku: 'framecut_pro_annual', title: 'Annual', price: '$48', period: '/ year', badge: 'Yearly', highlights: ['No watermark · up to 4K', 'Longer GIFs · clean PNGs', 'Updates while subscribed'] },
+  { sku: 'framecut_pro_monthly', title: 'Monthly', price: '$8', period: '/ month', badge: 'Flexible', highlights: ['No watermark · up to 4K', 'Longer GIFs · clean PNGs', 'Updates while subscribed'] },
+];
+
 export function ProPlans({ authenticated, busy, checkout }: { authenticated: boolean; busy: boolean; checkout: (sku: string) => void }) {
-  const [selected, setSelected] = useState('framecut_pro_perpetual');
-  const plans = [
-    { sku: 'framecut_pro_perpetual', title: 'One-time Pro', price: '$59', period: 'once', detail: 'Ongoing web Pro + 1 year of Mac updates' },
-    { sku: 'framecut_pro_annual', title: 'Annual', price: '$48', period: '/ year', detail: 'Billed yearly · renews automatically' },
-    { sku: 'framecut_pro_monthly', title: 'Monthly', price: '$8', period: '/ month', detail: 'Billed monthly · renews automatically' },
-  ];
+  const [selected, setSelected] = useState(plans[0].sku);
   return <section aria-label="Pro plans" className="space-y-3">
-    <div><h3 className="text-lg font-semibold">Choose your Pro</h3><p className="mt-1 text-xs text-zinc-400">One direct license for web Pro and two Macs.</p></div>
-    <div role="group" aria-label="Choose a Pro plan" className="space-y-2">{plans.map(plan => <button type="button" key={plan.sku} disabled={busy} aria-pressed={selected === plan.sku} onClick={() => setSelected(plan.sku)} className={`w-full rounded-xl border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-300 ${selected === plan.sku ? 'border-violet-400 bg-violet-400/10' : 'border-zinc-700 bg-zinc-950/40 hover:border-zinc-500'}`}><span className="flex items-center justify-between gap-2"><span className="text-sm font-semibold">{plan.title}</span><span className="text-xl font-semibold">{plan.price}<span className="ml-1 text-xs font-normal text-zinc-400">{plan.period}</span></span></span><span className="mt-2 block text-xs text-zinc-400">{plan.detail}</span></button>)}</div>
-    {authenticated ? <button type="button" disabled={busy} onClick={() => checkout(selected)} className="w-full rounded-xl bg-violet-500 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 disabled:opacity-50">Continue to secure checkout</button> : <p className="text-xs leading-relaxed text-violet-200">Sign in below to purchase Pro or redeem an existing license.</p>}
-    <p className="text-xs leading-relaxed text-zinc-400">Prices in USD. One-time Pro does not renew; eligible Mac releases keep working after update coverage ends. Subscriptions renew until canceled in Manage Stripe billing. 30-day refund window. Contact licensing@innosage.co for refunds or email changes. Mac App Store purchases are separate.</p>
+    <div><h3 className="text-2xl font-semibold tracking-tight">Choose your Pro</h3><p className="mt-2 text-xs text-zinc-400">Web Pro + two Macs · prices in USD</p></div>
+    <div role="group" aria-label="Choose a Pro plan" className="space-y-3">{plans.map(plan => <button type="button" key={plan.sku} disabled={busy} aria-pressed={selected === plan.sku} onClick={() => setSelected(plan.sku)}
+      className={`grid w-full grid-cols-[0.8fr_1.2fr] items-center gap-4 rounded-2xl border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-300 disabled:opacity-50 ${selected === plan.sku ? 'border-blue-400 bg-blue-400/10' : 'border-zinc-700 bg-zinc-950/30 hover:border-zinc-500'}`}>
+      <span><span className="block text-sm font-semibold">{plan.title}</span><span className="mt-2 block text-3xl font-semibold tracking-tight">{plan.price}<span className="ml-1 text-xs font-normal tracking-normal text-zinc-400">{plan.period}</span></span><span className="mt-2 inline-block rounded-full bg-white/5 px-2 py-1 text-[10px] font-medium text-zinc-300">{plan.badge}</span></span>
+      <span className="space-y-2 border-l border-white/10 pl-4">{plan.highlights.map(highlight => <span key={highlight} className="flex items-start gap-2 text-xs leading-relaxed text-zinc-300"><CheckCircle2 size={14} className={`mt-0.5 shrink-0 ${selected === plan.sku ? 'text-blue-300' : 'text-zinc-500'}`} aria-hidden="true" />{highlight}</span>)}</span>
+    </button>)}</div>
+    {authenticated ? <button type="button" disabled={busy} onClick={() => checkout(selected)} className="w-full rounded-xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 disabled:opacity-50">Continue to secure checkout</button> : <p className="text-xs text-blue-200">Sign in below to purchase or redeem a license.</p>}
+    <p className="text-xs leading-relaxed text-zinc-400">{selected === plans[0].sku ? 'Pay once. No renewal. Eligible Mac releases keep working after update coverage ends.' : 'Auto-renews until canceled in Manage Stripe billing.'} Mac App Store purchases are separate. 30-day refund window. <a href="mailto:licensing@innosage.co" className="underline underline-offset-2">Support & refunds</a></p>
   </section>;
 }
