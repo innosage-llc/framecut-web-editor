@@ -2,7 +2,7 @@
 
 The account paywall allocates approximately 58% of desktop column space to the screenshot carousel and 42% to compact plan cards. Small screens use one scrollable column. Common Pro features remain in the carousel; pricing and option-specific coverage remain on the right. Sign-in, redemption, billing, and session recovery use the existing verified-account flow.
 
-The carousel reuses the five App Store screenshot layouts, in order, at their original 2880 × 1800 resolution. Paywall copies omit the embedded page numbers; uploaded App Store artwork is unchanged. These are original FrameCut screenshots with original Northstar demo content. The artwork contains its own titles, eliminating duplicate headings. The carousel is labeled FrameCut for Mac to distinguish the native app screenshots from the browser UI. The previous two illustrative assets are removed.
+The carousel reuses the five App Store screenshot layouts, in order, at their original 2880 × 1800 resolution. The artwork omits embedded page numbers and matches the five updated images saved to App Store Connect. These are original FrameCut screenshots with original Northstar demo content. The artwork contains its own titles, eliminating duplicate headings. The carousel is labeled FrameCut for Mac to distinguish the native app screenshots from the browser UI. The previous two illustrative assets are removed.
 
 Previous/next arrows wrap through all five images, dots select a slide, and left/right keys navigate when the carousel is focused. Images have feature-specific alternative text. The carousel advances every six seconds, wraps to the first image, and pauses while hovered, keyboard-focused, hidden, or reduced motion is enabled. Manual navigation restarts the countdown.
 
